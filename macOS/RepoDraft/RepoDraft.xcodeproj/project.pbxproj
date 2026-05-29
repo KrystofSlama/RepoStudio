@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		8699C4112FC9887C00973FBE /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = 8699C4102FC9887C00973FBE /* Textual */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		8699C36E2FC8CB8400973FBE /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +56,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8699C4112FC9887C00973FBE /* Textual in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +117,7 @@
 			);
 			name = RepoDraft;
 			packageProductDependencies = (
+				8699C4102FC9887C00973FBE /* Textual */,
 			);
 			productName = RepoDraft;
 			productReference = 8699C3602FC8CB8200973FBE /* RepoDraft.app */;
@@ -195,6 +201,9 @@
 			);
 			mainGroup = 8699C3572FC8CB8200973FBE;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				8699C40F2FC9887C00973FBE /* XCRemoteSwiftPackageReference "textual" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 8699C3612FC8CB8200973FBE /* Products */;
 			projectDirPath = "";
@@ -401,7 +410,7 @@
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_USER_SELECTED_FILES = readonly;
+				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -433,7 +442,7 @@
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_USER_SELECTED_FILES = readonly;
+				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -573,6 +582,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		8699C40F2FC9887C00973FBE /* XCRemoteSwiftPackageReference "textual" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/gonzalezreal/textual";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.3.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		8699C4102FC9887C00973FBE /* Textual */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8699C40F2FC9887C00973FBE /* XCRemoteSwiftPackageReference "textual" */;
+			productName = Textual;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 8699C3582FC8CB8200973FBE /* Project object */;
 }

@@ -1,0 +1,839 @@
+//
+//  DashboardViewModel.swift
+//  RepoDraft
+//
+
+import AppKit
+import Combine
+import Foundation
+
+@MainActor
+final class DashboardViewModel: ObservableObject {
+    enum CanvasMode: String, CaseIterable, Identifiable {
+        case editor
+        case preview
+        case split
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .editor:
+                return "Editor"
+            case .preview:
+                return "Preview"
+            case .split:
+                return "Split"
+            }
+        }
+
+        var symbolName: String {
+            switch self {
+            case .editor:
+                return "doc.text"
+            case .preview:
+                return "eye"
+            case .split:
+                return "square.split.2x1"
+            }
+        }
+    }
+
+    struct FileTypeFilterOption: Identifiable, Hashable {
+        let key: String
+        let title: String
+
+        var id: String { key }
+    }
+
+    //MARK: -Published State
+    @Published private(set) var repositoryContext: RepositoryContext?
+    @Published private(set) var changedFiles: [ChangedFile] = []
+    @Published private(set) var repositoryFiles: [RepositoryFile] = []
+    @Published private(set) var selectedFile: ChangedFile?
+    @Published private(set) var isRefreshing = false
+    @Published private(set) var recentRepositoryPaths: [String] = []
+
+    @Published var selectedFilePath: String?
+    @Published var selectedFileTypeFilters: Set<String> = []
+    @Published var searchText = ""
+    @Published var canvasMode: CanvasMode = .split
+    @Published var isInspectorVisible = true
+    @Published var editorText = ""
+    @Published var readOnlyPreviewText = ""
+    @Published private(set) var selectedDiffLines: [DiffLine] = []
+    @Published private(set) var isDiffLoading = false
+    @Published var errorMessage: String?
+    @Published var shouldOfferInstallToolsAction = false
+
+    private let repositoryService: RepositoryService
+    private var refreshTimer: Timer?
+    private var saveTimer: Timer?
+    private var diffLoadTask: Task<Void, Never>?
+    private var diffSelectionKey: String?
+    private var loadedContentSelectionKey: String?
+    private var loadedDiffVersionKey: String?
+    private var diffCache: [String: [DiffLine]] = [:]
+
+    private var suppressNextRepositoryErrorAlert = false
+    private var isEditorDirty = false
+    private var isLoadingEditorTextFromDisk = false
+    private var dirtyEditorFilePath: String?
+    private var securityScopedRepositoryURL: URL?
+
+    private let recentRepositoriesKey = "repoDraft.recentRepositories"
+    private let repositoryBookmarksKey = "repoDraft.repositoryBookmarks"
+
+    var groupedChangedFiles: [(GitChangeType, [ChangedFile])] {
+        let grouped = Dictionary(grouping: filteredChangedFiles, by: { $0.changeType })
+        return grouped
+            .map { ($0.key, $0.value.sorted { $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending }) }
+            .sorted { lhs, rhs in
+                lhs.0.sortOrder < rhs.0.sortOrder
+            }
+    }
+
+    var filteredChangedFiles: [ChangedFile] {
+        filterChangedFiles(changedFiles)
+    }
+
+    var filteredRepositoryFiles: [RepositoryFile] {
+        let filteredByType = repositoryFiles.filter { file in
+            allowsByFileTypeFilter(path: file.path)
+        }
+
+        let filteredBySearch = applySearch(to: filteredByType.map(\.path))
+        let filteredSet = Set(filteredBySearch)
+
+        return filteredByType
+            .filter { filteredSet.contains($0.path) }
+            .sorted { $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending }
+    }
+
+    var selectedRepositoryFile: RepositoryFile? {
+        guard let selectedFilePath else {
+            return nil
+        }
+
+        return repositoryFiles.first(where: { $0.path == selectedFilePath })
+    }
+
+    var selectedFileURL: URL? {
+        guard
+            let repositoryContext,
+            let selectedFilePath,
+            selectedIsDeleted == false
+        else {
+            return nil
+        }
+
+        return repositoryContext.repoURL.appendingPathComponent(selectedFilePath)
+    }
+
+    var selectedFileDirectoryURL: URL? {
+        selectedFileURL?.deletingLastPathComponent()
+    }
+
+    var selectedDisplayPath: String? {
+        selectedFile?.displayPath ?? selectedFilePath
+    }
+
+    var selectedFileName: String {
+        guard let selectedFilePath else {
+            return ""
+        }
+
+        return URL(fileURLWithPath: selectedFilePath).lastPathComponent
+    }
+
+    var selectedStatusText: String {
+        if let changeType = selectedFile?.changeType {
+            return changeType.displayName
+        }
+
+        return "Unchanged"
+    }
+
+    var selectedTypeText: String {
+        if selectedIsMarkdown {
+            return "Markdown"
+        }
+
+        if selectedIsTextPreviewable {
+            return "Text"
+        }
+
+        if selectedIsBinary {
+            return "Binary"
+        }
+
+        return "Text"
+    }
+
+    var selectedTrackedText: String {
+        selectedIsTracked ? "Tracked" : "Untracked"
+    }
+
+    var selectedOldPath: String? {
+        selectedFile?.oldPath
+    }
+
+    var selectedIsMarkdown: Bool {
+        selectedFile?.isMarkdown ?? selectedRepositoryFile?.isMarkdown ?? false
+    }
+
+    var selectedIsBinary: Bool {
+        selectedFile?.isBinary ?? selectedRepositoryFile?.isBinary ?? false
+    }
+
+    var selectedIsTextPreviewable: Bool {
+        guard let path = selectedFilePath else {
+            return false
+        }
+        return Self.isTextPreviewable(path: path) && selectedIsBinary == false
+    }
+
+    var selectedIsDeleted: Bool {
+        selectedFile?.changeType == .deleted
+    }
+
+    var selectedIsTracked: Bool {
+        if let selectedFile {
+            return selectedFile.changeType != .untracked
+        }
+
+        return selectedRepositoryFile?.isTracked ?? false
+    }
+
+    var sidebarCountSummary: String {
+        "\(repositoryFiles.count) file(s) · \(changedFiles.count) changed"
+    }
+
+    var windowTitle: String {
+        repositoryContext?.repoName ?? "RepoDraft"
+    }
+
+    var fileTypeFilterOptions: [FileTypeFilterOption] {
+        [
+            FileTypeFilterOption(key: "md", title: "Markdown (.md)"),
+            FileTypeFilterOption(key: "swift", title: "Swift (.swift)"),
+            FileTypeFilterOption(key: "py", title: "Python (.py)"),
+            FileTypeFilterOption(key: "html", title: "HTML (.html)"),
+            FileTypeFilterOption(key: "css", title: "CSS (.css)"),
+            FileTypeFilterOption(key: "js", title: "JavaScript (.js)"),
+            FileTypeFilterOption(key: "ts", title: "TypeScript (.ts)"),
+            FileTypeFilterOption(key: "json", title: "JSON (.json)"),
+            FileTypeFilterOption(key: "yml", title: "YAML (.yml/.yaml)"),
+            FileTypeFilterOption(key: "txt", title: "Text (.txt)"),
+            FileTypeFilterOption(key: "_noext", title: "No Extension")
+        ]
+    }
+
+    var fileTypeFilterSummary: String {
+        if selectedFileTypeFilters.isEmpty {
+            return "No Filter"
+        }
+
+        if selectedFileTypeFilters.count == 1, let selected = selectedFileTypeFilters.first {
+            return displayName(forFilterKey: selected)
+        }
+
+        return "\(selectedFileTypeFilters.count) Types"
+    }
+
+    init(repositoryService: RepositoryService) {
+        self.repositoryService = repositoryService
+        loadRecentRepositories()
+    }
+
+    deinit {
+        refreshTimer?.invalidate()
+        saveTimer?.invalidate()
+        diffLoadTask?.cancel()
+        if let securityScopedRepositoryURL {
+            securityScopedRepositoryURL.stopAccessingSecurityScopedResource()
+        }
+    }
+
+    //MARK: -Public API
+    func openRepository() {
+        let panel = NSOpenPanel()
+        panel.title = "Open Git Repository"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+
+        if panel.runModal() == .OK, let url = panel.url {
+            Task {
+                await openRepository(at: url)
+            }
+        }
+    }
+
+    func openRecentRepository(at path: String) {
+        let url = resolvedRepositoryURL(forPath: path)
+        Task {
+            await openRepository(at: url)
+        }
+    }
+
+    func openRepository(atPath path: String, suppressErrorAlert: Bool = false) {
+        suppressNextRepositoryErrorAlert = suppressErrorAlert
+        Task {
+            await openRepository(at: URL(fileURLWithPath: path))
+        }
+    }
+
+    func refreshRepositoryState() {
+        guard let repoURL = repositoryContext?.repoURL else {
+            return
+        }
+
+        Task {
+            await refreshRepositoryState(at: repoURL)
+        }
+    }
+
+    func selectFile(_ file: ChangedFile?) {
+        persistEditorTextIfNeeded()
+        selectedFile = file
+        selectedFilePath = file?.path
+        loadSelectedFileArtifacts()
+    }
+
+    func selectFile(path: String?) {
+        persistEditorTextIfNeeded()
+        selectedFilePath = path
+        selectedFile = changedFiles.first(where: { $0.path == path })
+        loadSelectedFileArtifacts()
+    }
+
+    func setCanvasMode(_ mode: CanvasMode) {
+        canvasMode = mode
+    }
+
+    func toggleFileTypeFilter(_ key: String) {
+        if selectedFileTypeFilters.contains(key) {
+            selectedFileTypeFilters.remove(key)
+        } else {
+            selectedFileTypeFilters.insert(key)
+        }
+    }
+
+    func isFileTypeFilterSelected(_ key: String) -> Bool {
+        selectedFileTypeFilters.contains(key)
+    }
+
+    func clearFileTypeFilters() {
+        selectedFileTypeFilters.removeAll()
+    }
+
+    func changeType(for path: String) -> GitChangeType? {
+        changedFiles.first(where: { $0.path == path })?.changeType
+    }
+
+    func installXcodeCommandLineTools() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcode-select")
+        process.arguments = ["--install"]
+
+        do {
+            try process.run()
+        } catch {
+            errorMessage = """
+            Could not launch Xcode Command Line Tools installer.
+            Open Terminal and run: xcode-select --install
+            """
+        }
+    }
+
+    func toggleInspector() {
+        isInspectorVisible.toggle()
+    }
+
+    func toggleSidebar() {
+        NSApp.keyWindow?.firstResponder?.tryToPerform(
+            #selector(NSSplitViewController.toggleSidebar(_:)),
+            with: nil
+        )
+    }
+
+    func scheduleAutosaveForMarkdown() {
+        saveTimer?.invalidate()
+        saveTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.persistEditorTextIfNeeded()
+            }
+        }
+    }
+
+    func editorTextDidChange() {
+        guard selectedIsMarkdown, selectedIsDeleted == false else {
+            return
+        }
+
+        guard isLoadingEditorTextFromDisk == false else {
+            return
+        }
+
+        isEditorDirty = true
+        dirtyEditorFilePath = selectedFilePath
+        scheduleAutosaveForMarkdown()
+    }
+
+    //MARK: -Private Helpers
+    private func openRepository(at url: URL) async {
+        let securedURL = prepareRepositoryURLForAccess(url)
+
+        do {
+            try await repositoryService.validateRepository(at: securedURL)
+            clearSelectedFileState()
+            let context = try await repositoryService.fetchRepositoryContext(at: securedURL)
+            repositoryContext = context
+            errorMessage = nil
+            shouldOfferInstallToolsAction = false
+            addRecentRepository(securedURL.path)
+            saveBookmarkIfPossible(for: securedURL)
+
+            await refreshRepositoryState(at: securedURL)
+            startRefreshTimer()
+        } catch {
+            if suppressNextRepositoryErrorAlert {
+                suppressNextRepositoryErrorAlert = false
+                return
+            }
+            apply(error: error)
+        }
+        suppressNextRepositoryErrorAlert = false
+    }
+
+    private func refreshRepositoryState(at repoURL: URL) async {
+        guard !isRefreshing else {
+            return
+        }
+
+        isRefreshing = true
+        defer { isRefreshing = false }
+
+        do {
+            let context = try await repositoryService.fetchRepositoryContext(at: repoURL)
+            let files = try await repositoryService.fetchChangedFiles(at: repoURL)
+            let repositoryFiles = try await repositoryService.fetchRepositoryFiles(at: repoURL)
+
+            self.repositoryContext = context
+            self.changedFiles = files
+            self.repositoryFiles = repositoryFiles
+            reconcileSelectedFile()
+            errorMessage = nil
+            shouldOfferInstallToolsAction = false
+        } catch {
+            apply(error: error)
+        }
+    }
+
+    private func startRefreshTimer() {
+        refreshTimer?.invalidate()
+
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refreshRepositoryState()
+            }
+        }
+    }
+
+    private func reconcileSelectedFile() {
+        let previousChangedSelectionID = selectedFile?.id
+        let previousSelectedPath = selectedFilePath
+
+        guard let selectedFilePath else {
+            selectedFile = nil
+            editorText = ""
+            readOnlyPreviewText = ""
+            clearSelectedDiffState()
+            loadedContentSelectionKey = nil
+            return
+        }
+
+        selectedFile = changedFiles.first(where: { $0.path == selectedFilePath })
+
+        let fileExistsInRepositoryListing = repositoryFiles.contains(where: { $0.path == selectedFilePath })
+        if fileExistsInRepositoryListing == false, selectedFile?.changeType != .deleted {
+            self.selectedFilePath = nil
+            self.selectedFile = nil
+            editorText = ""
+            readOnlyPreviewText = ""
+            clearSelectedDiffState()
+            loadedContentSelectionKey = nil
+            isEditorDirty = false
+            dirtyEditorFilePath = nil
+            return
+        }
+
+        if shouldKeepDirtyEditorTextForSelectedFile() {
+            return
+        }
+
+        let forceReload = previousSelectedPath != selectedFilePath
+        loadSelectedFileArtifacts(
+            forceContentReload: forceReload,
+            previousChangedSelectionID: previousChangedSelectionID
+        )
+    }
+
+    private func loadSelectedFileArtifacts(
+        forceContentReload: Bool = true,
+        previousChangedSelectionID: String? = nil
+    ) {
+        loadSelectedFileContent(forceReload: forceContentReload)
+        loadSelectedFileDiff(previousChangedSelectionID: previousChangedSelectionID)
+    }
+
+    private func loadSelectedFileContent(forceReload: Bool) {
+        let selectionKey = currentSelectionKey()
+        if forceReload == false, selectionKey == loadedContentSelectionKey {
+            return
+        }
+
+        guard let fileURL = selectedFileURL else {
+            editorText = ""
+            readOnlyPreviewText = ""
+            isEditorDirty = false
+            dirtyEditorFilePath = nil
+            loadedContentSelectionKey = selectionKey
+            return
+        }
+
+        do {
+            let loadedText = try String(contentsOf: fileURL, encoding: .utf8)
+
+            if selectedIsMarkdown {
+                isLoadingEditorTextFromDisk = true
+                editorText = loadedText
+                isLoadingEditorTextFromDisk = false
+                readOnlyPreviewText = ""
+                isEditorDirty = false
+                dirtyEditorFilePath = nil
+                loadedContentSelectionKey = selectionKey
+                return
+            }
+
+            if selectedIsTextPreviewable {
+                readOnlyPreviewText = loadedText
+                editorText = ""
+                isEditorDirty = false
+                dirtyEditorFilePath = nil
+                loadedContentSelectionKey = selectionKey
+                return
+            }
+
+            editorText = ""
+            readOnlyPreviewText = ""
+            isEditorDirty = false
+            dirtyEditorFilePath = nil
+            loadedContentSelectionKey = selectionKey
+        } catch {
+            editorText = ""
+            readOnlyPreviewText = ""
+            isEditorDirty = false
+            dirtyEditorFilePath = nil
+            loadedContentSelectionKey = nil
+            errorMessage = DashboardError.fileReadFailed(fileURL.path).localizedDescription
+            shouldOfferInstallToolsAction = false
+        }
+    }
+
+    private func loadSelectedFileDiff(previousChangedSelectionID: String? = nil) {
+        guard let repositoryContext, let selectedFile else {
+            clearSelectedDiffState()
+            return
+        }
+
+        guard selectedFile.isBinary == false else {
+            clearSelectedDiffState()
+            return
+        }
+
+        let selectedFileID = selectedFile.id
+        let selectedPath = selectedFile.path
+        let repoURL = repositoryContext.repoURL
+        let selectionKey = "\(repoURL.path)|\(selectedPath)"
+        let versionKey = "\(selectionKey)|\(selectedFileID)"
+        let oldSelectionID = previousChangedSelectionID ?? selectedFileID
+
+        let isSameSelection = diffSelectionKey == selectionKey
+        if isSameSelection == false {
+            selectedDiffLines = []
+        }
+        diffSelectionKey = selectionKey
+
+        if loadedDiffVersionKey == versionKey, oldSelectionID == selectedFileID {
+            if let cached = diffCache[versionKey] {
+                selectedDiffLines = cached
+            }
+            return
+        }
+
+        if let cached = diffCache[versionKey] {
+            selectedDiffLines = cached
+            loadedDiffVersionKey = versionKey
+            if oldSelectionID == selectedFileID {
+                return
+            }
+        }
+
+        if isDiffLoading {
+            return
+        }
+
+        diffLoadTask?.cancel()
+        isDiffLoading = true
+
+        diffLoadTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+
+            do {
+                let diffLines = try await repositoryService.fetchDiffLines(at: repoURL, for: selectedFile)
+                guard Task.isCancelled == false else {
+                    return
+                }
+
+                if self.repositoryContext?.repoURL == repoURL,
+                   self.selectedFile?.id == selectedFileID,
+                   self.selectedFilePath == selectedPath {
+                    self.selectedDiffLines = diffLines
+                    self.diffCache[versionKey] = diffLines
+                    self.loadedDiffVersionKey = versionKey
+                    self.isDiffLoading = false
+                }
+            } catch {
+                guard Task.isCancelled == false else {
+                    return
+                }
+
+                if self.repositoryContext?.repoURL == repoURL,
+                   self.selectedFile?.id == selectedFileID,
+                   self.selectedFilePath == selectedPath {
+                    self.isDiffLoading = false
+                }
+            }
+        }
+    }
+
+    private func clearSelectedDiffState() {
+        diffLoadTask?.cancel()
+        selectedDiffLines = []
+        isDiffLoading = false
+        diffSelectionKey = nil
+        loadedDiffVersionKey = nil
+    }
+
+    private func persistEditorTextIfNeeded() {
+        guard
+            selectedIsMarkdown,
+            selectedIsDeleted == false,
+            let fileURL = selectedFileURL,
+            isEditorDirty
+        else {
+            return
+        }
+
+        do {
+            try editorText.write(to: fileURL, atomically: false, encoding: .utf8)
+            isEditorDirty = false
+            dirtyEditorFilePath = nil
+            loadedContentSelectionKey = currentSelectionKey()
+            loadedDiffVersionKey = nil
+
+            if let repoPath = repositoryContext?.repoURL.path, let selectedFilePath {
+                let prefix = "\(repoPath)|\(selectedFilePath)|"
+                diffCache = diffCache.filter { key, _ in
+                    key.hasPrefix(prefix) == false
+                }
+            }
+        } catch {
+            errorMessage = DashboardError.fileWriteFailed(fileURL.path).localizedDescription
+            shouldOfferInstallToolsAction = false
+        }
+    }
+
+    private func loadRecentRepositories() {
+        recentRepositoryPaths = UserDefaults.standard.stringArray(forKey: recentRepositoriesKey) ?? []
+    }
+
+    private func addRecentRepository(_ path: String) {
+        var paths = recentRepositoryPaths.filter { $0 != path }
+        paths.insert(path, at: 0)
+        recentRepositoryPaths = Array(paths.prefix(8))
+        UserDefaults.standard.set(recentRepositoryPaths, forKey: recentRepositoriesKey)
+    }
+
+    private func filterChangedFiles(_ files: [ChangedFile]) -> [ChangedFile] {
+        let filteredByType = files.filter { file in
+            allowsByFileTypeFilter(path: file.path)
+        }
+
+        let filteredBySearch = applySearch(to: filteredByType.map(\.path))
+        let filteredSet = Set(filteredBySearch)
+
+        return filteredByType
+            .filter { filteredSet.contains($0.path) }
+            .sorted {
+                if $0.changeType.sortOrder == $1.changeType.sortOrder {
+                    return $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending
+                }
+                return $0.changeType.sortOrder < $1.changeType.sortOrder
+            }
+    }
+
+    private func applySearch(to paths: [String]) -> [String] {
+        let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedSearch.isEmpty == false else {
+            return paths
+        }
+
+        return paths.filter { path in
+            path.localizedCaseInsensitiveContains(trimmedSearch)
+        }
+    }
+
+    private func allowsByFileTypeFilter(path: String) -> Bool {
+        guard selectedFileTypeFilters.isEmpty == false else {
+            return true
+        }
+
+        let extensionKey = normalizedExtensionKey(for: path)
+        return selectedFileTypeFilters.contains(extensionKey)
+    }
+
+    private func normalizedExtensionKey(for path: String) -> String {
+        let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
+        if ext.isEmpty {
+            return "_noext"
+        }
+
+        if ext == "yaml" {
+            return "yml"
+        }
+
+        return ext
+    }
+
+    private func displayName(forFilterKey key: String) -> String {
+        fileTypeFilterOptions.first(where: { $0.key == key })?.title ?? key.uppercased()
+    }
+
+    private func apply(error: Error) {
+        if let dashboardError = error as? DashboardError {
+            errorMessage = dashboardError.localizedDescription
+            shouldOfferInstallToolsAction = dashboardError.isMissingXcodeCommandLineTools
+            return
+        }
+
+        errorMessage = error.localizedDescription
+        shouldOfferInstallToolsAction = false
+    }
+
+    private func shouldKeepDirtyEditorTextForSelectedFile() -> Bool {
+        guard selectedIsMarkdown else {
+            return false
+        }
+
+        return isEditorDirty && selectedFilePath == dirtyEditorFilePath
+    }
+
+    private func clearSelectedFileState() {
+        selectedFilePath = nil
+        selectedFile = nil
+        editorText = ""
+        readOnlyPreviewText = ""
+        clearSelectedDiffState()
+        isEditorDirty = false
+        isLoadingEditorTextFromDisk = false
+        dirtyEditorFilePath = nil
+        loadedContentSelectionKey = nil
+        diffCache.removeAll()
+    }
+
+    private func prepareRepositoryURLForAccess(_ url: URL) -> URL {
+        if let securityScopedRepositoryURL, securityScopedRepositoryURL != url {
+            securityScopedRepositoryURL.stopAccessingSecurityScopedResource()
+            self.securityScopedRepositoryURL = nil
+        }
+
+        let didStart = url.startAccessingSecurityScopedResource()
+        if didStart {
+            securityScopedRepositoryURL = url
+        }
+
+        return url
+    }
+
+    private func resolvedRepositoryURL(forPath path: String) -> URL {
+        guard
+            let bookmarks = UserDefaults.standard.dictionary(forKey: repositoryBookmarksKey) as? [String: Data],
+            let bookmarkData = bookmarks[path]
+        else {
+            return URL(fileURLWithPath: path)
+        }
+
+        var isStale = false
+        guard
+            let resolvedURL = try? URL(
+                resolvingBookmarkData: bookmarkData,
+                options: [.withSecurityScope],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            )
+        else {
+            return URL(fileURLWithPath: path)
+        }
+
+        if isStale {
+            saveBookmarkIfPossible(for: resolvedURL)
+        }
+
+        return resolvedURL
+    }
+
+    private func saveBookmarkIfPossible(for url: URL) {
+        guard let bookmarkData = try? url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil) else {
+            return
+        }
+
+        var bookmarks = UserDefaults.standard.dictionary(forKey: repositoryBookmarksKey) as? [String: Data] ?? [:]
+        bookmarks[url.path] = bookmarkData
+        UserDefaults.standard.set(bookmarks, forKey: repositoryBookmarksKey)
+    }
+
+    private func currentSelectionKey() -> String? {
+        guard let repoURL = repositoryContext?.repoURL, let selectedFilePath else {
+            return nil
+        }
+
+        return "\(repoURL.path)|\(selectedFilePath)"
+    }
+
+    private static let textPreviewableExtensions: Set<String> = [
+        "md", "swift", "m", "mm", "h", "hpp", "c", "cpp", "cc",
+        "json", "yaml", "yml", "xml", "html", "htm", "css", "js", "ts",
+        "txt", "rst", "sh", "zsh", "bash", "plist", "pbxproj", "strings",
+        "gitignore", "env", "toml", "ini", "cfg", "sql", "csv"
+    ]
+
+    private static func isTextPreviewable(path: String) -> Bool {
+        let fileName = URL(fileURLWithPath: path).lastPathComponent.lowercased()
+        let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
+
+        if textPreviewableExtensions.contains(ext) {
+            return true
+        }
+
+        if ext.isEmpty {
+            return fileName == "makefile" || fileName.hasPrefix(".")
+        }
+
+        return false
+    }
+}
