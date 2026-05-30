@@ -622,7 +622,7 @@ extension DashboardView {
                         )
                     }
                 } label: {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 4) {
                         Image(systemName: "folder.fill")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(.blue)
@@ -655,7 +655,7 @@ extension DashboardView {
             Button {
                 onSelect(selection)
             } label: {
-                HStack(spacing: 8) {
+                HStack(spacing: 4) {
                     ChangeBadge(changeType: file.changeType)
 
                     VStack(alignment: .leading, spacing: 2) {
@@ -740,13 +740,13 @@ extension DashboardView {
             Button {
                 onSelect(selection)
             } label: {
-                HStack(spacing: 8) {
+                HStack(spacing: 4) {
                     if let changeType {
                         ChangeBadge(changeType: changeType)
                     } else {
                         Image(systemName: file.isMarkdown ? "doc.text" : "doc")
-                            .font(.caption)
-                            .frame(width: 20, height: 20)
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 22, height: 22)
                             .foregroundStyle(.secondary)
                     }
 

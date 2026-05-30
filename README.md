@@ -1,5 +1,3 @@
-# RepoDraft
-
 RepoDraft is a macOS SwiftUI app for working with local Git repositories and
 Markdown files in one place. It is designed for quick drafting and review
 workflows: inspect repository status, open files, edit Markdown, and preview
@@ -14,6 +12,10 @@ changes side by side.
 - Edit Markdown with a formatting toolbar.
 - Live Markdown preview with Editor / Preview / Split modes.
 - Built-in diff rendering for changed text files.
+
+## Built With
+
+- [Textual](https://github.com/gonzalezreal/textual) for rich Markdown rendering in SwiftUI.
 
 <p align="center">
   <img src="Screenshots/Screenshot%202026-05-30%20at%202.43.58.png" width="32%" alt="RepoDraft screenshot 1" />
