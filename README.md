@@ -1,4 +1,4 @@
-RepoDraft is a macOS SwiftUI app for working with local Git repositories and
+RepoStudio is a macOS SwiftUI app for working with local Git repositories and
 Markdown files in one place. It is designed for quick drafting and review
 workflows: inspect repository status, open files, edit Markdown, and preview
 changes side by side.
@@ -18,9 +18,9 @@ changes side by side.
 - [Textual](https://github.com/gonzalezreal/textual) for rich Markdown rendering in SwiftUI.
 
 <p align="center">
-  <img src="Screenshots/Screenshot%202026-05-30%20at%202.43.58.png" width="32%" alt="RepoDraft screenshot 1" />
-  <img src="Screenshots/Screenshot%202026-05-30%20at%202.44.10.png" width="32%" alt="RepoDraft screenshot 2" />
-  <img src="Screenshots/Screenshot%202026-05-30%20at%202.45.12.png" width="32%" alt="RepoDraft screenshot 3" />
+  <img src="Screenshots/Screenshot%202026-05-30%20at%202.43.58.png" width="32%" alt="RepoStudio screenshot 1" />
+  <img src="Screenshots/Screenshot%202026-05-30%20at%202.44.10.png" width="32%" alt="RepoStudio screenshot 2" />
+  <img src="Screenshots/Screenshot%202026-05-30%20at%202.45.12.png" width="32%" alt="RepoStudio screenshot 3" />
 </p>
 
 ## Requirements
@@ -32,16 +32,16 @@ changes side by side.
 ## Getting Started
 
 1. Clone this repository.
-2. Open `macOS/RepoDraft/RepoDraft.xcodeproj` in Xcode.
-3. Select the `RepoDraft` scheme.
+2. Open `macOS/RepoStudio/RepoStudio.xcodeproj` in Xcode.
+3. Select the `RepoStudio` scheme.
 4. Run the app.
 5. In the app, choose a local Git repository to begin.
 
 ## Project Structure
 
-- `macOS/RepoDraft/RepoDraft`: App source code.
-- `macOS/RepoDraft/RepoDraftTests`: Unit test target.
-- `macOS/RepoDraft/RepoDraftUITests`: UI test target.
+- `macOS/RepoStudio/RepoStudio`: App source code.
+- `macOS/RepoStudio/RepoStudioTests`: Unit test target.
+- `macOS/RepoStudio/RepoStudioUITests`: UI test target.
 - `icon`: Icon source assets.
 
 ## Contributing
@@ -52,4 +52,4 @@ before opening a pull request.
 ## License
 
 This project uses a custom license:
-[RepoDraft Community License v1.0](LICENSE)
+[RepoStudio Community License v1.0](LICENSE)

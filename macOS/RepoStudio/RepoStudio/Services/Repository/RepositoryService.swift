@@ -1,0 +1,15 @@
+//
+//  RepositoryService.swift
+//  RepoStudio
+//
+
+import Foundation
+
+//MARK: -Protocol
+protocol RepositoryService {
+    func validateRepository(at url: URL) async throws
+    func fetchRepositoryContext(at url: URL) async throws -> RepositoryContext
+    func fetchChangedFiles(at url: URL) async throws -> [ChangedFile]
+    func fetchRepositoryFiles(at url: URL) async throws -> [RepositoryFile]
+    func fetchDiffLines(at url: URL, for file: ChangedFile) async throws -> [DiffLine]
+}

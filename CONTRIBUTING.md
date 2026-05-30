@@ -1,4 +1,4 @@
-# Contributing to RepoDraft
+# Contributing to RepoStudio
 
 Thank you for your interest in contributing.
 
@@ -13,8 +13,8 @@ Thank you for your interest in contributing.
 
 1. Fork the repository.
 2. Clone your fork.
-3. Open `macOS/RepoDraft/RepoDraft.xcodeproj` in Xcode.
-4. Build and run the `RepoDraft` scheme.
+3. Open `macOS/RepoStudio/RepoStudio.xcodeproj` in Xcode.
+4. Build and run the `RepoStudio` scheme.
 
 ## Pull Request Guidelines
 
