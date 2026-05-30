@@ -3,6 +3,7 @@
 //  RepoStudio
 //
 
+import AppKit
 import SwiftUI
 
 @MainActor
@@ -85,6 +86,10 @@ struct DashboardCommands: Commands {
     @FocusedValue(\.dashboardCommandActions) private var commandActions
     @FocusedValue(\.workspaceCommandActions) private var workspaceCommandActions
 
+    private let privacyPolicyURL = URL(string: "https://repo-studio.com/privacy-policy")
+    private let termsOfUseURL = URL(string: "https://repo-studio.com/terms-of-use")
+    private let supportURL = URL(string: "https://repo-studio.com/support")
+
     var body: some Commands {
         CommandGroup(after: .newItem) {
             Button("Open Repository...") {
@@ -158,6 +163,22 @@ struct DashboardCommands: Commands {
             .keyboardShortcut("3", modifiers: [.command])
             .disabled(commandActions == nil)
         }
+
+        CommandGroup(after: .help) {
+            Divider()
+
+            Button("Privacy Policy") {
+                openExternalURL(privacyPolicyURL)
+            }
+
+            Button("Terms of Use") {
+                openExternalURL(termsOfUseURL)
+            }
+
+            Button("Support") {
+                openExternalURL(supportURL)
+            }
+        }
     }
 
     private var recentRepositoryPaths: [String] {
@@ -184,6 +205,11 @@ struct DashboardCommands: Commands {
         }
 
         commandActions?.openRecentRepository(path)
+    }
+
+    private func openExternalURL(_ url: URL?) {
+        guard let url else { return }
+        NSWorkspace.shared.open(url)
     }
 }
 

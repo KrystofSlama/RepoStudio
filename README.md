@@ -18,9 +18,9 @@ changes side by side.
 - [Textual](https://github.com/gonzalezreal/textual) for rich Markdown rendering in SwiftUI.
 
 <p align="center">
-  <img src="Screenshots/Screenshot%202026-05-30%20at%202.43.58.png" width="32%" alt="RepoStudio screenshot 1" />
-  <img src="Screenshots/Screenshot%202026-05-30%20at%202.44.10.png" width="32%" alt="RepoStudio screenshot 2" />
-  <img src="Screenshots/Screenshot%202026-05-30%20at%202.45.12.png" width="32%" alt="RepoStudio screenshot 3" />
+  <img src="Screenshots/Screenshot1.png" width="32%" alt="RepoStudio screenshot 1" />
+  <img src="Screenshots/Screenshot2.png" width="32%" alt="RepoStudio screenshot 2" />
+  <img src="Screenshots/Screenshot3.png" width="32%" alt="RepoStudio screenshot 3" />
 </p>
 
 ## Requirements
