@@ -15,6 +15,12 @@ changes side by side.
 - Live Markdown preview with Editor / Preview / Split modes.
 - Built-in diff rendering for changed text files.
 
+<p align="center">
+  <img src="Screenshots/Screenshot%202026-05-30%20at%202.43.58.png" width="32%" alt="RepoDraft screenshot 1" />
+  <img src="Screenshots/Screenshot%202026-05-30%20at%202.44.10.png" width="32%" alt="RepoDraft screenshot 2" />
+  <img src="Screenshots/Screenshot%202026-05-30%20at%202.45.12.png" width="32%" alt="RepoDraft screenshot 3" />
+</p>
+
 ## Requirements
 
 - macOS
