@@ -8,14 +8,22 @@ import SwiftUI
 struct MarkdownEditorView: View {
     //MARK: -State
     @Binding var text: String
+    let showsFormatToolbar: Bool
     @State var selectionRange = NSRange(location: 0, length: 0)
     @State var focusRequestID = UUID()
+
+    init(text: Binding<String>, showsFormatToolbar: Bool = true) {
+        _text = text
+        self.showsFormatToolbar = showsFormatToolbar
+    }
 
     //MARK: -Body
     var body: some View {
         VStack(spacing: 0) {
-            formatToolbar
-            Divider()
+            if showsFormatToolbar {
+                formatToolbar
+                Divider()
+            }
             MarkdownTextEditorRepresentable(
                 text: $text,
                 selectionRange: $selectionRange,

@@ -306,6 +306,10 @@ extension MarkdownEditorView {
         private static func toggleLinePrefix(_ prefix: String, in source: String, selection: NSRange) -> MarkdownEditResult {
             let sourceNSString = source as NSString
             let lineRange = sourceNSString.lineRange(for: selection)
+            if selection.length == 0 {
+                return toggleSingleLinePrefix(prefix, in: sourceNSString, lineRange: lineRange, selection: selection)
+            }
+
             let block = sourceNSString.substring(with: lineRange)
             let lines = block.components(separatedBy: "\n")
             let markerLength = (prefix as NSString).length
@@ -334,6 +338,54 @@ extension MarkdownEditorView {
             let newSelection = NSRange(location: lineRange.location, length: (replacement as NSString).length)
 
             return MarkdownEditResult(text: newText, selection: newSelection)
+        }
+
+        private static func toggleSingleLinePrefix(
+            _ prefix: String,
+            in source: NSString,
+            lineRange: NSRange,
+            selection: NSRange
+        ) -> MarkdownEditResult {
+            let markerLength = (prefix as NSString).length
+            let contentRange = lineContentRange(for: lineRange, in: source)
+            let line = source.substring(with: contentRange)
+
+            if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                let newText = source.replacingCharacters(in: contentRange, with: prefix)
+                let newSelection = NSRange(location: contentRange.location + markerLength, length: 0)
+                return MarkdownEditResult(text: newText, selection: newSelection)
+            }
+
+            let shouldUnprefix = line.hasPrefix(prefix)
+            let replacement: String
+            let newLocation: Int
+
+            if shouldUnprefix {
+                replacement = String(line.dropFirst(markerLength))
+                newLocation = max(contentRange.location, selection.location - markerLength)
+            } else {
+                replacement = prefix + line
+                newLocation = selection.location + markerLength
+            }
+
+            let newText = source.replacingCharacters(in: contentRange, with: replacement)
+            let newSelection = NSRange(location: newLocation, length: 0)
+            return MarkdownEditResult(text: newText, selection: newSelection)
+        }
+
+        private static func lineContentRange(for lineRange: NSRange, in source: NSString) -> NSRange {
+            var contentEnd = NSMaxRange(lineRange)
+
+            while contentEnd > lineRange.location {
+                let character = source.character(at: contentEnd - 1)
+                if character == 10 || character == 13 {
+                    contentEnd -= 1
+                } else {
+                    break
+                }
+            }
+
+            return NSRange(location: lineRange.location, length: contentEnd - lineRange.location)
         }
 
         private static func codeBlock(in source: String, selection: NSRange) -> MarkdownEditResult {

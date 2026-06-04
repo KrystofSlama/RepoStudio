@@ -162,7 +162,7 @@ struct GitCLIRepositoryService: RepositoryService {
         let extensionName = URL(fileURLWithPath: path).pathExtension.lowercased()
         let binaryExtensions: Set<String> = [
             "png", "jpg", "jpeg", "gif", "webp", "pdf", "zip", "jar",
-            "xcassets", "mov", "mp4", "ico", "icns"
+            "xcassets", "mov", "mp4", "m4v", "ico", "icns"
         ]
 
         return binaryExtensions.contains(extensionName)

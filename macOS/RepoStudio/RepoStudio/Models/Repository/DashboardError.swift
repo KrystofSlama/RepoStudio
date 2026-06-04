@@ -23,13 +23,13 @@ enum DashboardError: LocalizedError, Equatable {
             let trimmed = details.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty {
                 return """
-                RepoStudio requires Xcode Command Line Tools (Git).
-                Install them and relaunch the app.
+                Git features require Git.
+                Install Xcode Command Line Tools to enable repository status and diffs.
                 """
             }
             return """
-            RepoStudio requires Xcode Command Line Tools (Git).
-            Install them and relaunch the app.
+            Git features require Git.
+            Install Xcode Command Line Tools to enable repository status and diffs.
             Details: \(trimmed)
             """
         case .invalidGitOutput(let rawLine):

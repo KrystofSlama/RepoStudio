@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		8699C4112FC9887C00973FBE /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = 8699C4102FC9887C00973FBE /* Textual */; };
+		8699C5AA2FCE280A00973FBE /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = 8699C5A92FCE280A00973FBE /* Textual */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -56,7 +56,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				8699C4112FC9887C00973FBE /* Textual in Frameworks */,
+				8699C5AA2FCE280A00973FBE /* Textual in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -83,6 +83,7 @@
 				8699C3622FC8CB8200973FBE /* RepoStudio */,
 				8699C3702FC8CB8400973FBE /* RepoStudioTests */,
 				8699C37A2FC8CB8400973FBE /* RepoStudioUITests */,
+				8699C5A82FCE280A00973FBE /* Frameworks */,
 				8699C3612FC8CB8200973FBE /* Products */,
 			);
 			sourceTree = "<group>";
@@ -95,6 +96,13 @@
 				8699C3772FC8CB8400973FBE /* RepoStudioUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		8699C5A82FCE280A00973FBE /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -117,7 +125,7 @@
 			);
 			name = RepoStudio;
 			packageProductDependencies = (
-				8699C4102FC9887C00973FBE /* Textual */,
+				8699C5A92FCE280A00973FBE /* Textual */,
 			);
 			productName = RepoStudio;
 			productReference = 8699C3602FC8CB8200973FBE /* RepoStudio.app */;
@@ -202,7 +210,7 @@
 			mainGroup = 8699C3572FC8CB8200973FBE;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				8699C40F2FC9887C00973FBE /* XCRemoteSwiftPackageReference "textual" */,
+				8699C5A72FCE27E700973FBE /* XCRemoteSwiftPackageReference "textual" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 8699C3612FC8CB8200973FBE /* Products */;
@@ -406,7 +414,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = JGHY9S72WQ;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -442,7 +450,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = JGHY9S72WQ;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -592,7 +600,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		8699C40F2FC9887C00973FBE /* XCRemoteSwiftPackageReference "textual" */ = {
+		8699C5A72FCE27E700973FBE /* XCRemoteSwiftPackageReference "textual" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/gonzalezreal/textual";
 			requirement = {
@@ -603,9 +611,9 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		8699C4102FC9887C00973FBE /* Textual */ = {
+		8699C5A92FCE280A00973FBE /* Textual */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 8699C40F2FC9887C00973FBE /* XCRemoteSwiftPackageReference "textual" */;
+			package = 8699C5A72FCE27E700973FBE /* XCRemoteSwiftPackageReference "textual" */;
 			productName = Textual;
 		};
 /* End XCSwiftPackageProductDependency section */

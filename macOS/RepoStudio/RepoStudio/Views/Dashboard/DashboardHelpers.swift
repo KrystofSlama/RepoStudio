@@ -4,6 +4,8 @@
 //
 
 import AppKit
+import AVKit
+import PDFKit
 import SwiftUI
 
 @MainActor
@@ -228,9 +230,9 @@ extension DashboardView {
             }
             .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
 
-            Section("Repository Files") {
+            Section("Files") {
                 if repositoryTreeRoots.isEmpty {
-                    Text("No repository files match search.")
+                    Text("No files match search.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } else {
@@ -247,7 +249,13 @@ extension DashboardView {
                 }
             }
 
-            if viewModel.groupedChangedFiles.isEmpty {
+            if viewModel.isGitRepository == false {
+                Section("Git Changes") {
+                    Text(viewModel.folderWorkspaceReason)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            } else if viewModel.groupedChangedFiles.isEmpty {
                 Section("Git Changes") {
                     Text("No changed files match search.")
                         .font(.footnote)
@@ -309,12 +317,18 @@ extension DashboardView {
                     } else {
                         deletedFileCanvas(fileName: viewModel.selectedFileName)
                     }
+                } else if viewModel.selectedIsImagePreviewable {
+                    imagePreviewCanvas(fileName: viewModel.selectedFileName)
+                } else if viewModel.selectedIsVideoPreviewable {
+                    videoPreviewCanvas(fileName: viewModel.selectedFileName)
+                } else if viewModel.selectedIsPDFPreviewable {
+                    pdfPreviewCanvas(fileName: viewModel.selectedFileName)
                 } else if viewModel.selectedIsMarkdown {
                     markdownCanvas
+                } else if viewModel.selectedIsEditableText {
+                    textEditorCanvas(fileName: viewModel.selectedFileName)
                 } else if shouldShowDiffCanvas {
                     diffCanvas(fileName: viewModel.selectedFileName)
-                } else if viewModel.selectedIsTextPreviewable {
-                    textPreviewCanvas(fileName: viewModel.selectedFileName)
                 } else {
                     nonMarkdownCanvas(fileName: viewModel.selectedFileName)
                 }
@@ -358,23 +372,57 @@ extension DashboardView {
                 .font(.system(size: 28))
             Text(fileName)
                 .font(.headline)
-            Text("Editing is limited to Markdown in V1.1.1.")
+            Text("Preview is not available for this file type.")
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    func textPreviewCanvas(fileName: String) -> some View {
-        LineNumberedTextView(text: viewModel.readOnlyPreviewText)
+    func textEditorCanvas(fileName: String) -> some View {
+        Group {
+            if shouldShowDiffCanvas {
+                HSplitView {
+                    plainTextEditor
+                    diffCanvas(fileName: fileName)
+                }
+            } else {
+                plainTextEditor
+            }
+        }
+        .navigationTitle(fileName)
+    }
+
+    var plainTextEditor: some View {
+        MarkdownEditorView(text: $viewModel.editorText, showsFormatToolbar: false)
             .id(readOnlyCanvasIdentity)
             .overlay(alignment: .topTrailing) {
-                Text("Read-only")
+                Text("Text Editor")
                     .font(.caption)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(.thinMaterial, in: Capsule())
                     .padding(10)
             }
+            .onChange(of: viewModel.editorText) {
+                viewModel.editorTextDidChange()
+            }
+    }
+
+    func imagePreviewCanvas(fileName: String) -> some View {
+        FileImagePreview(fileURL: viewModel.selectedFileURL, fileName: fileName)
+            .id(readOnlyCanvasIdentity)
+            .navigationTitle(fileName)
+    }
+
+    func videoPreviewCanvas(fileName: String) -> some View {
+        FileVideoPreview(fileURL: viewModel.selectedFileURL, fileName: fileName)
+            .id(readOnlyCanvasIdentity)
+            .navigationTitle(fileName)
+    }
+
+    func pdfPreviewCanvas(fileName: String) -> some View {
+        FilePDFPreview(fileURL: viewModel.selectedFileURL, fileName: fileName)
+            .id(readOnlyCanvasIdentity)
             .navigationTitle(fileName)
     }
 
@@ -801,7 +849,7 @@ extension DashboardView {
                     .font(.system(size: 28))
                 Text("Select a file")
                     .font(.headline)
-                Text("Open a repository and pick a file from the sidebar.")
+                Text("Open a folder and pick a file from the sidebar.")
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -905,6 +953,108 @@ extension DashboardView {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    struct FileImagePreview: View {
+        let fileURL: URL?
+        let fileName: String
+
+        var body: some View {
+            Group {
+                if let fileURL, let image = NSImage(contentsOf: fileURL) {
+                    ScrollView([.vertical, .horizontal]) {
+                        Image(nsImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .padding(24)
+                    }
+                    .background(Color(nsColor: .textBackgroundColor))
+                } else {
+                    unavailablePreview(fileName: fileName, systemImage: "photo")
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                previewBadge("Image")
+            }
+        }
+    }
+
+    struct FileVideoPreview: View {
+        let fileURL: URL?
+        let fileName: String
+
+        var body: some View {
+            Group {
+                if let fileURL {
+                    VideoPlayer(player: AVPlayer(url: fileURL))
+                        .background(.black)
+                } else {
+                    unavailablePreview(fileName: fileName, systemImage: "play.rectangle")
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                previewBadge("Video")
+            }
+        }
+    }
+
+    struct FilePDFPreview: View {
+        let fileURL: URL?
+        let fileName: String
+
+        var body: some View {
+            Group {
+                if let fileURL {
+                    PDFPreviewRepresentable(fileURL: fileURL)
+                } else {
+                    unavailablePreview(fileName: fileName, systemImage: "doc.richtext")
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                previewBadge("PDF")
+            }
+        }
+    }
+
+    struct PDFPreviewRepresentable: NSViewRepresentable {
+        let fileURL: URL
+
+        func makeNSView(context: Context) -> PDFView {
+            let pdfView = PDFView()
+            pdfView.autoScales = true
+            pdfView.displayMode = .singlePageContinuous
+            pdfView.displaysPageBreaks = true
+            pdfView.document = PDFDocument(url: fileURL)
+            return pdfView
+        }
+
+        func updateNSView(_ pdfView: PDFView, context: Context) {
+            if pdfView.document?.documentURL != fileURL {
+                pdfView.document = PDFDocument(url: fileURL)
+            }
+        }
+    }
+
+    static func previewBadge(_ title: String) -> some View {
+        Text(title)
+            .font(.caption)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.thinMaterial, in: Capsule())
+            .padding(10)
+    }
+
+    static func unavailablePreview(fileName: String, systemImage: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.system(size: 28))
+            Text(fileName)
+                .font(.headline)
+            Text("Preview could not be loaded.")
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     struct UnifiedDiffView: View {

@@ -50,6 +50,8 @@ final class DashboardViewModel: ObservableObject {
     @Published private(set) var repositoryContext: RepositoryContext?
     @Published private(set) var changedFiles: [ChangedFile] = []
     @Published private(set) var repositoryFiles: [RepositoryFile] = []
+    @Published private(set) var isGitRepository = false
+    @Published private(set) var folderWorkspaceReason = "No git repository."
     @Published private(set) var selectedFile: ChangedFile?
     @Published private(set) var isRefreshing = false
     @Published private(set) var recentRepositoryPaths: [String] = []
@@ -83,6 +85,7 @@ final class DashboardViewModel: ObservableObject {
 
     private let recentRepositoriesKey = "repoDraft.recentRepositories"
     private let repositoryBookmarksKey = "repoDraft.repositoryBookmarks"
+    private let noGitRepositoryLabel = "No git repository"
 
     var groupedChangedFiles: [(GitChangeType, [ChangedFile])] {
         let grouped = Dictionary(grouping: filteredChangedFiles, by: { $0.changeType })
@@ -147,6 +150,10 @@ final class DashboardViewModel: ObservableObject {
     }
 
     var selectedStatusText: String {
+        if isGitRepository == false {
+            return "No Git"
+        }
+
         if let changeType = selectedFile?.changeType {
             return changeType.displayName
         }
@@ -157,6 +164,18 @@ final class DashboardViewModel: ObservableObject {
     var selectedTypeText: String {
         if selectedIsMarkdown {
             return "Markdown"
+        }
+
+        if selectedIsImagePreviewable {
+            return "Image"
+        }
+
+        if selectedIsVideoPreviewable {
+            return "Video"
+        }
+
+        if selectedIsPDFPreviewable {
+            return "PDF"
         }
 
         if selectedIsTextPreviewable {
@@ -171,7 +190,11 @@ final class DashboardViewModel: ObservableObject {
     }
 
     var selectedTrackedText: String {
-        selectedIsTracked ? "Tracked" : "Untracked"
+        if isGitRepository == false {
+            return "No Git"
+        }
+
+        return selectedIsTracked ? "Tracked" : "Untracked"
     }
 
     var selectedOldPath: String? {
@@ -193,6 +216,34 @@ final class DashboardViewModel: ObservableObject {
         return Self.isTextPreviewable(path: path) && selectedIsBinary == false
     }
 
+    var selectedIsEditableText: Bool {
+        selectedIsMarkdown || selectedIsTextPreviewable
+    }
+
+    var selectedIsImagePreviewable: Bool {
+        guard let path = selectedFilePath else {
+            return false
+        }
+
+        return Self.isImagePreviewable(path: path)
+    }
+
+    var selectedIsVideoPreviewable: Bool {
+        guard let path = selectedFilePath else {
+            return false
+        }
+
+        return Self.isVideoPreviewable(path: path)
+    }
+
+    var selectedIsPDFPreviewable: Bool {
+        guard let path = selectedFilePath else {
+            return false
+        }
+
+        return Self.isPDFPreviewable(path: path)
+    }
+
     var selectedIsDeleted: Bool {
         selectedFile?.changeType == .deleted
     }
@@ -206,7 +257,11 @@ final class DashboardViewModel: ObservableObject {
     }
 
     var sidebarCountSummary: String {
-        "\(repositoryFiles.count) file(s) · \(changedFiles.count) changed"
+        if isGitRepository == false {
+            return "\(repositoryFiles.count) file(s) · No Git"
+        }
+
+        return "\(repositoryFiles.count) file(s) · \(changedFiles.count) changed"
     }
 
     var windowTitle: String {
@@ -225,6 +280,10 @@ final class DashboardViewModel: ObservableObject {
             FileTypeFilterOption(key: "json", title: "JSON (.json)"),
             FileTypeFilterOption(key: "yml", title: "YAML (.yml/.yaml)"),
             FileTypeFilterOption(key: "txt", title: "Text (.txt)"),
+            FileTypeFilterOption(key: "png", title: "PNG (.png)"),
+            FileTypeFilterOption(key: "jpg", title: "JPEG (.jpg/.jpeg)"),
+            FileTypeFilterOption(key: "pdf", title: "PDF (.pdf)"),
+            FileTypeFilterOption(key: "mp4", title: "Video (.mp4/.mov)"),
             FileTypeFilterOption(key: "_noext", title: "No Extension")
         ]
     }
@@ -368,7 +427,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func editorTextDidChange() {
-        guard selectedIsMarkdown, selectedIsDeleted == false else {
+        guard selectedIsEditableText, selectedIsDeleted == false else {
             return
         }
 
@@ -390,6 +449,8 @@ final class DashboardViewModel: ObservableObject {
             clearSelectedFileState()
             let context = try await repositoryService.fetchRepositoryContext(at: securedURL)
             repositoryContext = context
+            isGitRepository = true
+            folderWorkspaceReason = "No git repository."
             errorMessage = nil
             shouldOfferInstallToolsAction = false
             addRecentRepository(securedURL.path)
@@ -398,12 +459,36 @@ final class DashboardViewModel: ObservableObject {
             await refreshRepositoryState(at: securedURL)
             startRefreshTimer()
         } catch {
+            if shouldOpenAsFolderWorkspace(for: error) {
+                await openFolderWorkspace(at: securedURL, reason: folderWorkspaceReason(for: error))
+                return
+            }
+
             if suppressNextRepositoryErrorAlert {
                 suppressNextRepositoryErrorAlert = false
                 return
             }
             apply(error: error)
         }
+        suppressNextRepositoryErrorAlert = false
+    }
+
+    private func openFolderWorkspace(at url: URL, reason: String) async {
+        clearSelectedFileState()
+        repositoryContext = RepositoryContext(
+            repoURL: url,
+            repoName: url.lastPathComponent,
+            branchName: noGitRepositoryLabel
+        )
+        isGitRepository = false
+        folderWorkspaceReason = reason
+        errorMessage = nil
+        shouldOfferInstallToolsAction = false
+        addRecentRepository(url.path)
+        saveBookmarkIfPossible(for: url)
+
+        await refreshRepositoryState(at: url)
+        startRefreshTimer()
         suppressNextRepositoryErrorAlert = false
     }
 
@@ -416,13 +501,25 @@ final class DashboardViewModel: ObservableObject {
         defer { isRefreshing = false }
 
         do {
-            let context = try await repositoryService.fetchRepositoryContext(at: repoURL)
-            let files = try await repositoryService.fetchChangedFiles(at: repoURL)
-            let repositoryFiles = try await repositoryService.fetchRepositoryFiles(at: repoURL)
+            if isGitRepository {
+                let context = try await repositoryService.fetchRepositoryContext(at: repoURL)
+                let files = try await repositoryService.fetchChangedFiles(at: repoURL)
+                let repositoryFiles = try await repositoryService.fetchRepositoryFiles(at: repoURL)
 
-            self.repositoryContext = context
-            self.changedFiles = files
-            self.repositoryFiles = repositoryFiles
+                self.repositoryContext = context
+                self.changedFiles = files
+                self.repositoryFiles = repositoryFiles
+            } else {
+                let files = try fetchFolderFiles(at: repoURL)
+                self.repositoryContext = RepositoryContext(
+                    repoURL: repoURL,
+                    repoName: repoURL.lastPathComponent,
+                    branchName: noGitRepositoryLabel
+                )
+                self.changedFiles = []
+                self.repositoryFiles = files
+            }
+
             reconcileSelectedFile()
             errorMessage = nil
             shouldOfferInstallToolsAction = false
@@ -503,31 +600,22 @@ final class DashboardViewModel: ObservableObject {
             return
         }
 
+        guard selectedIsEditableText else {
+            editorText = ""
+            readOnlyPreviewText = ""
+            isEditorDirty = false
+            dirtyEditorFilePath = nil
+            loadedContentSelectionKey = selectionKey
+            return
+        }
+
         do {
             let loadedText = try String(contentsOf: fileURL, encoding: .utf8)
 
-            if selectedIsMarkdown {
-                isLoadingEditorTextFromDisk = true
-                editorText = loadedText
-                isLoadingEditorTextFromDisk = false
-                readOnlyPreviewText = ""
-                isEditorDirty = false
-                dirtyEditorFilePath = nil
-                loadedContentSelectionKey = selectionKey
-                return
-            }
-
-            if selectedIsTextPreviewable {
-                readOnlyPreviewText = loadedText
-                editorText = ""
-                isEditorDirty = false
-                dirtyEditorFilePath = nil
-                loadedContentSelectionKey = selectionKey
-                return
-            }
-
-            editorText = ""
-            readOnlyPreviewText = ""
+            isLoadingEditorTextFromDisk = true
+            editorText = loadedText
+            isLoadingEditorTextFromDisk = false
+            readOnlyPreviewText = selectedIsMarkdown ? "" : loadedText
             isEditorDirty = false
             dirtyEditorFilePath = nil
             loadedContentSelectionKey = selectionKey
@@ -631,7 +719,7 @@ final class DashboardViewModel: ObservableObject {
 
     private func persistEditorTextIfNeeded() {
         guard
-            selectedIsMarkdown,
+            selectedIsEditableText,
             selectedIsDeleted == false,
             let fileURL = selectedFileURL,
             isEditorDirty
@@ -717,6 +805,14 @@ final class DashboardViewModel: ObservableObject {
             return "yml"
         }
 
+        if ext == "jpeg" {
+            return "jpg"
+        }
+
+        if ext == "mov" || ext == "m4v" {
+            return "mp4"
+        }
+
         return ext
     }
 
@@ -735,8 +831,97 @@ final class DashboardViewModel: ObservableObject {
         shouldOfferInstallToolsAction = false
     }
 
+    private func shouldOpenAsFolderWorkspace(for error: Error) -> Bool {
+        if let dashboardError = error as? DashboardError {
+            switch dashboardError {
+            case .invalidRepository:
+                return true
+            case .missingXcodeCommandLineTools:
+                return true
+            case .gitCommandFailed(_, let message):
+                return message.localizedCaseInsensitiveContains("not a git repository")
+                    || dashboardError.isMissingXcodeCommandLineTools
+            default:
+                return false
+            }
+        }
+
+        return error.localizedDescription.localizedCaseInsensitiveContains("not a git repository")
+    }
+
+    private func folderWorkspaceReason(for error: Error) -> String {
+        if let dashboardError = error as? DashboardError, dashboardError.isMissingXcodeCommandLineTools {
+            return "Git features require Git. Install Xcode Command Line Tools to show repository status and diffs."
+        }
+
+        return "No git repository."
+    }
+
+    private func fetchFolderFiles(at rootURL: URL) throws -> [RepositoryFile] {
+        let fileManager = FileManager.default
+        let resourceKeys: Set<URLResourceKey> = [.isRegularFileKey]
+        let options: FileManager.DirectoryEnumerationOptions = [.skipsHiddenFiles, .skipsPackageDescendants]
+
+        guard let enumerator = fileManager.enumerator(
+            at: rootURL,
+            includingPropertiesForKeys: Array(resourceKeys),
+            options: options,
+            errorHandler: { _, _ in true }
+        ) else {
+            throw DashboardError.fileReadFailed(rootURL.path)
+        }
+
+        let standardizedRootPath = rootURL.standardizedFileURL.path
+        let rootPrefix = standardizedRootPath.hasSuffix("/") ? standardizedRootPath : "\(standardizedRootPath)/"
+
+        var files: [RepositoryFile] = []
+
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: resourceKeys), values.isRegularFile == true else {
+                continue
+            }
+
+            let standardizedFilePath = fileURL.standardizedFileURL.path
+            guard standardizedFilePath.hasPrefix(rootPrefix) else {
+                continue
+            }
+
+            let relativePath = String(standardizedFilePath.dropFirst(rootPrefix.count))
+            guard relativePath.isEmpty == false else {
+                continue
+            }
+
+            files.append(
+                RepositoryFile(
+                    path: relativePath,
+                    isMarkdown: isMarkdownPath(relativePath),
+                    isBinary: isBinaryPath(relativePath),
+                    isTracked: false
+                )
+            )
+        }
+
+        return files.sorted { lhs, rhs in
+            lhs.path.localizedCaseInsensitiveCompare(rhs.path) == .orderedAscending
+        }
+    }
+
+    private func isMarkdownPath(_ path: String) -> Bool {
+        URL(fileURLWithPath: path).pathExtension.lowercased() == "md"
+    }
+
+    private func isBinaryPath(_ path: String) -> Bool {
+        let extensionName = URL(fileURLWithPath: path).pathExtension.lowercased()
+        let binaryExtensions: Set<String> = [
+            "png", "jpg", "jpeg", "gif", "webp", "pdf", "zip", "jar",
+            "xcassets", "mov", "mp4", "m4v", "ico", "icns"
+        ]
+
+        return binaryExtensions.contains(extensionName)
+    }
+
     private func shouldKeepDirtyEditorTextForSelectedFile() -> Bool {
-        guard selectedIsMarkdown else {
+        guard selectedIsEditableText else {
             return false
         }
 
@@ -822,6 +1007,14 @@ final class DashboardViewModel: ObservableObject {
         "gitignore", "env", "toml", "ini", "cfg", "sql", "csv"
     ]
 
+    private static let imagePreviewableExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "webp"
+    ]
+
+    private static let videoPreviewableExtensions: Set<String> = [
+        "mov", "mp4", "m4v"
+    ]
+
     private static func isTextPreviewable(path: String) -> Bool {
         let fileName = URL(fileURLWithPath: path).lastPathComponent.lowercased()
         let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
@@ -835,5 +1028,17 @@ final class DashboardViewModel: ObservableObject {
         }
 
         return false
+    }
+
+    private static func isImagePreviewable(path: String) -> Bool {
+        imagePreviewableExtensions.contains(URL(fileURLWithPath: path).pathExtension.lowercased())
+    }
+
+    private static func isVideoPreviewable(path: String) -> Bool {
+        videoPreviewableExtensions.contains(URL(fileURLWithPath: path).pathExtension.lowercased())
+    }
+
+    private static func isPDFPreviewable(path: String) -> Bool {
+        URL(fileURLWithPath: path).pathExtension.lowercased() == "pdf"
     }
 }

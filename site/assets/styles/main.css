@@ -579,6 +579,12 @@ a {
   gap: 16px;
 }
 
+.support-stack {
+  margin-top: 22px;
+  display: grid;
+  gap: 16px;
+}
+
 .support-card {
   border-radius: var(--radius-md);
   border: 1px solid var(--line);
@@ -588,6 +594,16 @@ a {
 
 .support-card h3 {
   margin: 0 0 12px;
+}
+
+.support-card h4 {
+  margin: 18px 0 8px;
+  font-size: 0.96rem;
+  color: var(--ink);
+}
+
+.support-card h3 + h4 {
+  margin-top: 0;
 }
 
 .support-card p,
