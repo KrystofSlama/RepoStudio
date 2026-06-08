@@ -20,7 +20,7 @@
 
 <div align="center">
   <a href="https://apps.apple.com/us/app/repostudio/id6774970113?mt=12&itscg=30200&itsct=apps_box_badge&mttnsubad=6774970113" style="display: inline-block;">
-    <img src="https://toolbox.marketingtools.apple.com/api/v2/badges/download-on-the-app-store/black/en-us?releaseDate=1780531200" alt="Download on the App Store" style="width: 245px; height: 82px; vertical-align: middle; object-fit: contain;" />
+    <img src="https://toolbox.marketingtools.apple.com/api/v2/badges/download-on-the-app-store/black/en-us?releaseDate=1780531200" alt="Download on the App Store" style="width: 122px; height: 41px; vertical-align: middle; object-fit: contain;" />
   </a>
 </div>
     
