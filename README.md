@@ -5,7 +5,7 @@
 <div align="center">
   <!-- License -->
   <a href="LICENSE">
-    <img src="https://img.shields.io/github/license/marktext/marktext.svg" alt="LICENSE">
+    <img src="https://img.shields.io/github/license/krystofslama/repostudio" alt="LICENSE">
   </a>
 </div>
 
