@@ -13,10 +13,14 @@ struct DashboardCommandActions {
     let recentRepositoryPaths: [String]
     let isRepositoryOpen: Bool
     let isInspectorVisible: Bool
+    let primarySyncActionTitle: String
+    let canPerformPrimarySyncAction: Bool
 
     let openRepository: () -> Void
     let openRecentRepository: (String) -> Void
     let refreshRepositoryState: () -> Void
+    let performPrimarySyncAction: () -> Void
+    let showNewBranchSheet: () -> Void
     let toggleInspector: () -> Void
     let toggleSidebar: () -> Void
     let setCanvasMode: (DashboardViewModel.CanvasMode) -> Void
@@ -25,6 +29,8 @@ struct DashboardCommandActions {
         recentRepositoryPaths = viewModel.recentRepositoryPaths
         isRepositoryOpen = viewModel.repositoryContext != nil
         isInspectorVisible = viewModel.isInspectorVisible
+        primarySyncActionTitle = viewModel.primarySyncActionTitle
+        canPerformPrimarySyncAction = viewModel.canPerformPrimarySyncAction
 
         openRepository = { [weak viewModel] in
             viewModel?.openRepository()
@@ -34,6 +40,12 @@ struct DashboardCommandActions {
         }
         refreshRepositoryState = { [weak viewModel] in
             viewModel?.refreshRepositoryState()
+        }
+        performPrimarySyncAction = { [weak viewModel] in
+            viewModel?.performPrimarySyncAction()
+        }
+        showNewBranchSheet = { [weak viewModel] in
+            viewModel?.showNewBranchSheet()
         }
         toggleInspector = { [weak viewModel] in
             viewModel?.toggleInspector()
@@ -130,6 +142,18 @@ struct DashboardCommands: Commands {
                 commandActions?.refreshRepositoryState()
             }
             .disabled(commandActions?.isRepositoryOpen != true)
+
+            Divider()
+
+            Button(commandActions?.primarySyncActionTitle ?? "Sync") {
+                commandActions?.performPrimarySyncAction()
+            }
+            .disabled(commandActions?.canPerformPrimarySyncAction != true)
+
+            Button("New Branch...") {
+                commandActions?.showNewBranchSheet()
+            }
+            .disabled(commandActions?.canPerformPrimarySyncAction != true)
         }
 
         CommandMenu("View") {
@@ -215,6 +239,39 @@ struct DashboardCommands: Commands {
     }
 }
 
+struct NewBranchSheet: View {
+    @ObservedObject var viewModel: DashboardViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("New Branch")
+                .font(.headline)
+
+            TextField("Branch name", text: $viewModel.newBranchName)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit {
+                    viewModel.createBranchFromPrompt()
+                }
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    viewModel.cancelNewBranchCreation()
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Button("Create Branch") {
+                    viewModel.createBranchFromPrompt()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(viewModel.newBranchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(18)
+        .frame(width: 360)
+    }
+}
+
 extension DashboardView {
     //MARK: -Subviews
     var sidebar: some View {
@@ -267,6 +324,7 @@ extension DashboardView {
                         ForEach(group.1) { file in
                             SidebarChangedFileRow(
                                 file: file,
+                                viewModel: viewModel,
                                 selection: .changedFile(fileID: file.id, path: file.path),
                                 isSelected: sidebarSelection == .changedFile(fileID: file.id, path: file.path),
                                 onSelect: { selection in
@@ -276,6 +334,13 @@ extension DashboardView {
                         }
                     }
                 }
+            }
+
+            if viewModel.isGitRepository {
+                Section("Commit") {
+                    SidebarCommitPanel(viewModel: viewModel)
+                }
+                .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
             }
         }
         .listStyle(.sidebar)
@@ -547,6 +612,109 @@ extension DashboardView {
     }
 
     //MARK: -Rows
+    struct BranchPickerMenu: View {
+        @ObservedObject var viewModel: DashboardViewModel
+
+        var body: some View {
+            Menu {
+                Button("New Branch...") {
+                    viewModel.showNewBranchSheet()
+                }
+                .disabled(viewModel.isGitOperationInProgress)
+
+                Divider()
+
+                if viewModel.localBranches.isEmpty {
+                    Text("No Local Branches")
+                } else {
+                    ForEach(viewModel.localBranches) { branch in
+                        Button {
+                            viewModel.checkoutBranch(branch)
+                        } label: {
+                            HStack {
+                                Text(branch.name)
+                                if branch.isCurrent {
+                                    Spacer()
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                        .disabled(branch.isCurrent || viewModel.isGitOperationInProgress)
+                    }
+                }
+
+                if viewModel.remoteBranches.isEmpty == false {
+                    Divider()
+                    Text("Remote Branches")
+                    ForEach(viewModel.remoteBranches) { branch in
+                        Button(branch.name) {}
+                            .disabled(true)
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "point.topleft.down.curvedto.point.bottomright.up")
+                    Text("Branch")
+                    Image(systemName: "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .menuStyle(.button)
+            .help("Switch or create branches")
+        }
+    }
+
+    struct SidebarCommitPanel: View {
+        @ObservedObject var viewModel: DashboardViewModel
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 8) {
+                TextField("Summary (required)", text: $viewModel.commitSummary)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(viewModel.isGitOperationInProgress)
+
+                TextEditor(text: $viewModel.commitDescription)
+                    .font(.body)
+                    .frame(minHeight: 80, idealHeight: 96)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.primary.opacity(0.15), lineWidth: 1)
+                    )
+                    .disabled(viewModel.isGitOperationInProgress)
+
+                HStack {
+                    Text("\(viewModel.selectedCommitFileCount) of \(viewModel.changedFiles.count) selected")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+
+                Button {
+                    viewModel.commitSelectedFiles()
+                } label: {
+                    HStack {
+                        if viewModel.activeGitOperationLabel == "Committing..." {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Text(viewModel.commitButtonTitle)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(viewModel.canCommitSelectedFiles == false)
+
+                if viewModel.changedFiles.isEmpty {
+                    Text("No changes to commit.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
     struct SidebarRepositoryHeader: View {
         @ObservedObject var viewModel: DashboardViewModel
 
@@ -569,11 +737,33 @@ extension DashboardView {
                 if let context = viewModel.repositoryContext {
                     Text(context.repoName)
                         .font(.headline)
-                    HStack(spacing: 6) {
-                        Image(systemName: "point.topleft.down.curvedto.point.bottomright.up")
+
+                    if viewModel.isGitRepository {
+                        HStack(spacing: 8) {
+                            BranchPickerMenu(viewModel: viewModel)
+
+                            Button {
+                                viewModel.performPrimarySyncAction()
+                            } label: {
+                                Label(viewModel.primarySyncActionTitle, systemImage: viewModel.primarySyncActionSymbolName)
+                                    .labelStyle(.iconOnly)
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(viewModel.canPerformPrimarySyncAction == false)
+                            .help(viewModel.primarySyncActionTitle)
+                        }
+
+                        Text(context.branchName)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+
+                        Text(viewModel.syncStatusText)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text(context.branchName)
+                            .lineLimit(1)
+                    } else {
+                        Text(viewModel.folderWorkspaceReason)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -721,31 +911,46 @@ extension DashboardView {
 
     struct SidebarChangedFileRow: View {
         let file: ChangedFile
+        @ObservedObject var viewModel: DashboardViewModel
         let selection: DashboardSidebarSelection
         let isSelected: Bool
         let onSelect: (DashboardSidebarSelection) -> Void
 
         var body: some View {
-            Button {
-                onSelect(selection)
-            } label: {
-                HStack(spacing: 4) {
-                    ChangeBadge(changeType: file.changeType)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(file.fileName)
-                            .lineLimit(1)
-                        Text(file.relativeDirectory.isEmpty ? file.path : file.relativeDirectory)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-
-                    Spacer()
+            HStack(spacing: 6) {
+                Button {
+                    viewModel.toggleCommitFileSelection(file)
+                } label: {
+                    Image(systemName: viewModel.isCommitFileSelected(file) ? "checkmark.square.fill" : "square")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(viewModel.isCommitFileSelected(file) ? Color.accentColor : .secondary)
+                        .frame(width: 18, height: 22)
                 }
-                .padding(.vertical, 2)
+                .buttonStyle(.plain)
+                .disabled(viewModel.isGitOperationInProgress)
+                .help(viewModel.isCommitFileSelected(file) ? "Exclude from commit" : "Include in commit")
+
+                Button {
+                    onSelect(selection)
+                } label: {
+                    HStack(spacing: 4) {
+                        ChangeBadge(changeType: file.changeType)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(file.fileName)
+                                .lineLimit(1)
+                            Text(file.relativeDirectory.isEmpty ? file.path : file.relativeDirectory)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        Spacer()
+                    }
+                    .padding(.vertical, 2)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
             .listRowBackground(isSelected ? Color.accentColor.opacity(0.22) : Color.clear)
         }
     }

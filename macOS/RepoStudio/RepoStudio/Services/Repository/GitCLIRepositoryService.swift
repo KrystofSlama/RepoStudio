@@ -121,6 +121,124 @@ struct GitCLIRepositoryService: RepositoryService {
         return diffParser.parse(unifiedDiff)
     }
 
+    func commit(files: [ChangedFile], summary: String, description: String, at url: URL) async throws {
+        let trimmedSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedSummary.isEmpty == false, files.isEmpty == false else {
+            return
+        }
+
+        let paths = commitPaths(for: files)
+        guard paths.isEmpty == false else {
+            return
+        }
+
+        try await runRepositoryCommand(
+            in: url,
+            command: ["add", "-A", "--"] + paths
+        )
+
+        var commitCommand = ["commit", "-m", trimmedSummary]
+        let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedDescription.isEmpty == false {
+            commitCommand.append(contentsOf: ["-m", trimmedDescription])
+        }
+
+        try await runRepositoryCommand(in: url, command: commitCommand)
+    }
+
+    func createBranch(named branchName: String, at url: URL) async throws {
+        let trimmedBranchName = branchName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedBranchName.isEmpty == false else {
+            return
+        }
+
+        try await runRepositoryCommand(
+            in: url,
+            command: ["switch", "-c", trimmedBranchName]
+        )
+    }
+
+    func checkoutBranch(named branchName: String, at url: URL) async throws {
+        let trimmedBranchName = branchName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedBranchName.isEmpty == false else {
+            return
+        }
+
+        try await runRepositoryCommand(
+            in: url,
+            command: ["switch", trimmedBranchName]
+        )
+    }
+
+    func fetchBranches(at url: URL) async throws -> [GitBranch] {
+        let output = try await runRepositoryCommand(
+            in: url,
+            command: ["branch", "--all", "--format=%(HEAD)%09%(refname)%09%(refname:short)"]
+        )
+
+        return parseBranches(output)
+    }
+
+    func pullCurrentBranch(at url: URL) async throws {
+        try await runRepositoryCommand(
+            in: url,
+            command: ["pull", "--ff-only"]
+        )
+    }
+
+    func pushCurrentBranch(at url: URL) async throws {
+        try await runRepositoryCommand(
+            in: url,
+            command: ["push"]
+        )
+    }
+
+    func publishCurrentBranch(remoteName: String, at url: URL) async throws {
+        let trimmedRemoteName = remoteName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedRemoteName.isEmpty == false else {
+            return
+        }
+
+        let currentBranchName = try await fetchBranchName(in: url)
+        try await runRepositoryCommand(
+            in: url,
+            command: ["push", "-u", trimmedRemoteName, currentBranchName]
+        )
+    }
+
+    func fetchRemoteTrackingState(at url: URL) async throws -> GitRemoteTrackingState {
+        let upstreamOutput: String
+        do {
+            upstreamOutput = try await runRepositoryCommand(
+                in: url,
+                command: ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]
+            )
+        } catch let error as DashboardError {
+            if isMissingUpstreamError(error) {
+                return .unpublished
+            }
+            throw error
+        }
+
+        let upstreamBranch = upstreamOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard upstreamBranch.isEmpty == false else {
+            return .unpublished
+        }
+
+        let countOutput = try await runRepositoryCommand(
+            in: url,
+            command: ["rev-list", "--left-right", "--count", "HEAD...@{u}"]
+        )
+
+        let counts = parseAheadBehindCounts(countOutput)
+        return GitRemoteTrackingState(
+            upstreamBranch: upstreamBranch,
+            aheadCount: counts.ahead,
+            behindCount: counts.behind,
+            isPublished: true
+        )
+    }
+
     private func fetchBranchName(in repoURL: URL) async throws -> String {
         do {
             let branchOutput = try await runRepositoryCommand(
@@ -140,6 +258,85 @@ struct GitCLIRepositoryService: RepositoryService {
             command: ["rev-parse", "--short", "HEAD"]
         )
         return hashOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func commitPaths(for files: [ChangedFile]) -> [String] {
+        var seenPaths = Set<String>()
+        var paths: [String] = []
+
+        for file in files {
+            if let oldPath = file.oldPath, oldPath.isEmpty == false, seenPaths.insert(oldPath).inserted {
+                paths.append(oldPath)
+            }
+
+            if file.path.isEmpty == false, seenPaths.insert(file.path).inserted {
+                paths.append(file.path)
+            }
+        }
+
+        return paths
+    }
+
+    private func parseBranches(_ output: String) -> [GitBranch] {
+        output
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .compactMap { line -> GitBranch? in
+                let columns = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+                guard columns.count >= 3 else {
+                    return nil
+                }
+
+                let headMarker = columns[0].trimmingCharacters(in: .whitespacesAndNewlines)
+                let fullRefName = columns[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                let shortName = columns[2].trimmingCharacters(in: .whitespacesAndNewlines)
+                guard shortName.isEmpty == false, shortName.hasSuffix("/HEAD") == false else {
+                    return nil
+                }
+
+                return GitBranch(
+                    name: shortName,
+                    isCurrent: headMarker == "*",
+                    isRemote: fullRefName.hasPrefix("refs/remotes/")
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.isCurrent != rhs.isCurrent {
+                    return lhs.isCurrent
+                }
+
+                if lhs.isRemote != rhs.isRemote {
+                    return rhs.isRemote
+                }
+
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+    }
+
+    private func parseAheadBehindCounts(_ output: String) -> (ahead: Int, behind: Int) {
+        let parts = output
+            .split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" })
+            .map(String.init)
+
+        guard parts.count >= 2 else {
+            return (0, 0)
+        }
+
+        return (
+            ahead: Int(parts[0]) ?? 0,
+            behind: Int(parts[1]) ?? 0
+        )
+    }
+
+    private func isMissingUpstreamError(_ error: DashboardError) -> Bool {
+        guard case let .gitCommandFailed(_, message) = error else {
+            return false
+        }
+
+        let lowered = message.lowercased()
+        return lowered.contains("no upstream configured")
+            || lowered.contains("no upstream branch")
+            || lowered.contains("upstream branch")
+            || lowered.contains("@{u}")
     }
 
     private func runRepositoryCommand(in repoURL: URL, command: [String]) async throws -> String {

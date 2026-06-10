@@ -70,6 +70,9 @@ struct DashboardView: View {
         .onChange(of: viewModel.repositoryContext?.repoURL.path) {
             sidebarSelection = nil
         }
+        .sheet(isPresented: $viewModel.isNewBranchSheetPresented) {
+            NewBranchSheet(viewModel: viewModel)
+        }
         .alert(
             "Repository Error",
             isPresented: Binding(

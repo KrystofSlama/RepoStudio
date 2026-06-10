@@ -53,8 +53,14 @@ final class DashboardViewModel: ObservableObject {
     @Published private(set) var isGitRepository = false
     @Published private(set) var folderWorkspaceReason = "No git repository."
     @Published private(set) var selectedFile: ChangedFile?
+    @Published private(set) var isOpeningRepository = false
     @Published private(set) var isRefreshing = false
     @Published private(set) var recentRepositoryPaths: [String] = []
+    @Published private(set) var selectedCommitFileIDs: Set<String> = []
+    @Published private(set) var branches: [GitBranch] = []
+    @Published private(set) var remoteTrackingState = GitRemoteTrackingState.unpublished
+    @Published private(set) var activeGitOperationLabel: String?
+    @Published private(set) var isGitOperationInProgress = false
 
     @Published var selectedFilePath: String?
     @Published var selectedFileTypeFilters: Set<String> = []
@@ -63,6 +69,10 @@ final class DashboardViewModel: ObservableObject {
     @Published var isInspectorVisible = true
     @Published var editorText = ""
     @Published var readOnlyPreviewText = ""
+    @Published var commitSummary = ""
+    @Published var commitDescription = ""
+    @Published var isNewBranchSheetPresented = false
+    @Published var newBranchName = ""
     @Published private(set) var selectedDiffLines: [DiffLine] = []
     @Published private(set) var isDiffLoading = false
     @Published var errorMessage: String?
@@ -82,6 +92,7 @@ final class DashboardViewModel: ObservableObject {
     private var isLoadingEditorTextFromDisk = false
     private var dirtyEditorFilePath: String?
     private var securityScopedRepositoryURL: URL?
+    private var lastChangedFileIDs: Set<String> = []
 
     private let recentRepositoriesKey = "repoDraft.recentRepositories"
     private let repositoryBookmarksKey = "repoDraft.repositoryBookmarks"
@@ -264,6 +275,102 @@ final class DashboardViewModel: ObservableObject {
         return "\(repositoryFiles.count) file(s) · \(changedFiles.count) changed"
     }
 
+    var localBranches: [GitBranch] {
+        branches.filter { $0.isRemote == false }
+    }
+
+    var remoteBranches: [GitBranch] {
+        branches.filter { $0.isRemote }
+    }
+
+    var selectedCommitFiles: [ChangedFile] {
+        changedFiles.filter { selectedCommitFileIDs.contains($0.id) }
+    }
+
+    var selectedCommitFileCount: Int {
+        selectedCommitFiles.count
+    }
+
+    var canCommitSelectedFiles: Bool {
+        isGitRepository
+            && isGitOperationInProgress == false
+            && selectedCommitFileCount > 0
+            && commitSummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
+    var commitButtonTitle: String {
+        let branchName = repositoryContext?.branchName ?? "branch"
+        return "Commit \(selectedCommitFileCount) file(s) to \(branchName)"
+    }
+
+    var syncStatusText: String {
+        guard isGitRepository else {
+            return "No Git"
+        }
+
+        if remoteTrackingState.isPublished == false {
+            return "Unpublished branch"
+        }
+
+        if remoteTrackingState.aheadCount > 0, remoteTrackingState.behindCount > 0 {
+            return "\(remoteTrackingState.aheadCount) ahead · \(remoteTrackingState.behindCount) behind"
+        }
+
+        if remoteTrackingState.aheadCount > 0 {
+            return "\(remoteTrackingState.aheadCount) ahead"
+        }
+
+        if remoteTrackingState.behindCount > 0 {
+            return "\(remoteTrackingState.behindCount) behind"
+        }
+
+        if let upstreamBranch = remoteTrackingState.upstreamBranch {
+            return "Up to date with \(upstreamBranch)"
+        }
+
+        return "Up to date"
+    }
+
+    var primarySyncActionTitle: String {
+        if let activeGitOperationLabel {
+            return activeGitOperationLabel
+        }
+
+        if remoteTrackingState.isPublished == false {
+            return "Publish Branch"
+        }
+
+        if remoteTrackingState.behindCount > 0 {
+            return "Pull"
+        }
+
+        if remoteTrackingState.aheadCount > 0 {
+            return "Push"
+        }
+
+        return "Refresh"
+    }
+
+    var primarySyncActionSymbolName: String {
+        if remoteTrackingState.isPublished == false {
+            return "square.and.arrow.up"
+        }
+
+        if remoteTrackingState.behindCount > 0 {
+            return "arrow.down"
+        }
+
+        if remoteTrackingState.aheadCount > 0 {
+            return "arrow.up"
+        }
+
+        return "arrow.clockwise"
+    }
+
+    var canPerformPrimarySyncAction: Bool {
+        isGitRepository && isGitOperationInProgress == false && repositoryContext != nil
+    }
+
     var windowTitle: String {
         repositoryContext?.repoName ?? "RepoStudio"
     }
@@ -323,24 +430,26 @@ final class DashboardViewModel: ObservableObject {
         panel.allowsMultipleSelection = false
 
         if panel.runModal() == .OK, let url = panel.url {
-            Task {
-                await openRepository(at: url)
-            }
+            openRepository(at: url)
+        }
+    }
+
+    func openRepository(at url: URL, suppressErrorAlert: Bool = false) {
+        suppressNextRepositoryErrorAlert = suppressErrorAlert
+        Task {
+            await openRepositoryFromURL(url)
         }
     }
 
     func openRecentRepository(at path: String) {
-        let url = resolvedRepositoryURL(forPath: path)
-        Task {
-            await openRepository(at: url)
-        }
+        openRepository(at: resolvedRepositoryURL(forPath: path))
     }
 
     func openRepository(atPath path: String, suppressErrorAlert: Bool = false) {
-        suppressNextRepositoryErrorAlert = suppressErrorAlert
-        Task {
-            await openRepository(at: URL(fileURLWithPath: path))
-        }
+        openRepository(
+            at: resolvedRepositoryURL(forPath: path),
+            suppressErrorAlert: suppressErrorAlert
+        )
     }
 
     func refreshRepositoryState() {
@@ -389,6 +498,120 @@ final class DashboardViewModel: ObservableObject {
 
     func changeType(for path: String) -> GitChangeType? {
         changedFiles.first(where: { $0.path == path })?.changeType
+    }
+
+    func isCommitFileSelected(_ file: ChangedFile) -> Bool {
+        selectedCommitFileIDs.contains(file.id)
+    }
+
+    func toggleCommitFileSelection(_ file: ChangedFile) {
+        if selectedCommitFileIDs.contains(file.id) {
+            selectedCommitFileIDs.remove(file.id)
+        } else {
+            selectedCommitFileIDs.insert(file.id)
+        }
+    }
+
+    func commitSelectedFiles() {
+        guard canCommitSelectedFiles else {
+            return
+        }
+
+        let filesToCommit = selectedCommitFiles
+        let summary = commitSummary
+        let description = commitDescription
+
+        runGitOperation(label: "Committing...") { [repositoryService] repoURL in
+            try await repositoryService.commit(
+                files: filesToCommit,
+                summary: summary,
+                description: description,
+                at: repoURL
+            )
+        } onSuccess: { [weak self] in
+            self?.commitSummary = ""
+            self?.commitDescription = ""
+        }
+    }
+
+    func showNewBranchSheet() {
+        newBranchName = ""
+        isNewBranchSheetPresented = true
+    }
+
+    func cancelNewBranchCreation() {
+        newBranchName = ""
+        isNewBranchSheetPresented = false
+    }
+
+    func createBranchFromPrompt() {
+        let branchName = newBranchName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard branchName.isEmpty == false else {
+            return
+        }
+
+        isNewBranchSheetPresented = false
+        newBranchName = ""
+        createBranch(named: branchName)
+    }
+
+    func createBranch(named branchName: String) {
+        let trimmedBranchName = branchName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedBranchName.isEmpty == false else {
+            return
+        }
+
+        runGitOperation(label: "Creating branch...") { [repositoryService] repoURL in
+            try await repositoryService.createBranch(named: trimmedBranchName, at: repoURL)
+        }
+    }
+
+    func checkoutBranch(_ branch: GitBranch) {
+        guard branch.isRemote == false, branch.isCurrent == false else {
+            return
+        }
+
+        checkoutBranch(named: branch.name)
+    }
+
+    func checkoutBranch(named branchName: String) {
+        let trimmedBranchName = branchName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedBranchName.isEmpty == false else {
+            return
+        }
+
+        runGitOperation(label: "Switching branch...") { [repositoryService] repoURL in
+            try await repositoryService.checkoutBranch(named: trimmedBranchName, at: repoURL)
+        }
+    }
+
+    func performPrimarySyncAction() {
+        guard canPerformPrimarySyncAction else {
+            return
+        }
+
+        if remoteTrackingState.isPublished == false {
+            runGitOperation(label: "Publishing...") { [repositoryService] repoURL in
+                try await repositoryService.publishCurrentBranch(remoteName: "origin", at: repoURL)
+            }
+            return
+        }
+
+        if remoteTrackingState.behindCount > 0 {
+            runGitOperation(label: "Pulling...") { [repositoryService] repoURL in
+                try await repositoryService.pullCurrentBranch(at: repoURL)
+            }
+            return
+        }
+
+        if remoteTrackingState.aheadCount > 0 {
+            runGitOperation(label: "Pushing...") { [repositoryService] repoURL in
+                try await repositoryService.pushCurrentBranch(at: repoURL)
+            }
+            return
+        }
+
+        refreshRepositoryState()
     }
 
     func installXcodeCommandLineTools() {
@@ -441,7 +664,16 @@ final class DashboardViewModel: ObservableObject {
     }
 
     //MARK: -Private Helpers
-    private func openRepository(at url: URL) async {
+    private func openRepositoryFromURL(_ url: URL) async {
+        guard isOpeningRepository == false else {
+            return
+        }
+
+        isOpeningRepository = true
+        defer {
+            isOpeningRepository = false
+        }
+
         let securedURL = prepareRepositoryURLForAccess(url)
 
         do {
@@ -474,22 +706,51 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func openFolderWorkspace(at url: URL, reason: String) async {
+        do {
+            let files = try fetchFolderFiles(at: url)
+            clearSelectedFileState()
+            repositoryContext = RepositoryContext(
+                repoURL: url,
+                repoName: url.lastPathComponent,
+                branchName: noGitRepositoryLabel
+            )
+            isGitRepository = false
+            folderWorkspaceReason = reason
+            errorMessage = nil
+            shouldOfferInstallToolsAction = false
+            changedFiles = []
+            repositoryFiles = files
+            branches = []
+            remoteTrackingState = .unpublished
+            reconcileCommitSelection()
+            addRecentRepository(url.path)
+            saveBookmarkIfPossible(for: url)
+
+            startRefreshTimer()
+        } catch {
+            clearRepositoryStateAfterOpenFailure(reason: reason)
+            if suppressNextRepositoryErrorAlert {
+                suppressNextRepositoryErrorAlert = false
+                return
+            }
+            apply(error: error)
+        }
+
+        suppressNextRepositoryErrorAlert = false
+    }
+
+    private func clearRepositoryStateAfterOpenFailure(reason: String) {
         clearSelectedFileState()
-        repositoryContext = RepositoryContext(
-            repoURL: url,
-            repoName: url.lastPathComponent,
-            branchName: noGitRepositoryLabel
-        )
+        repositoryContext = nil
         isGitRepository = false
         folderWorkspaceReason = reason
+        changedFiles = []
+        repositoryFiles = []
+        branches = []
+        remoteTrackingState = .unpublished
+        reconcileCommitSelection()
         errorMessage = nil
         shouldOfferInstallToolsAction = false
-        addRecentRepository(url.path)
-        saveBookmarkIfPossible(for: url)
-
-        await refreshRepositoryState(at: url)
-        startRefreshTimer()
-        suppressNextRepositoryErrorAlert = false
     }
 
     private func refreshRepositoryState(at repoURL: URL) async {
@@ -505,10 +766,15 @@ final class DashboardViewModel: ObservableObject {
                 let context = try await repositoryService.fetchRepositoryContext(at: repoURL)
                 let files = try await repositoryService.fetchChangedFiles(at: repoURL)
                 let repositoryFiles = try await repositoryService.fetchRepositoryFiles(at: repoURL)
+                let branches = try await repositoryService.fetchBranches(at: repoURL)
+                let remoteTrackingState = try await repositoryService.fetchRemoteTrackingState(at: repoURL)
 
                 self.repositoryContext = context
                 self.changedFiles = files
                 self.repositoryFiles = repositoryFiles
+                self.branches = branches
+                self.remoteTrackingState = remoteTrackingState
+                reconcileCommitSelection()
             } else {
                 let files = try fetchFolderFiles(at: repoURL)
                 self.repositoryContext = RepositoryContext(
@@ -518,6 +784,9 @@ final class DashboardViewModel: ObservableObject {
                 )
                 self.changedFiles = []
                 self.repositoryFiles = files
+                self.branches = []
+                self.remoteTrackingState = .unpublished
+                reconcileCommitSelection()
             }
 
             reconcileSelectedFile()
@@ -526,6 +795,57 @@ final class DashboardViewModel: ObservableObject {
         } catch {
             apply(error: error)
         }
+    }
+
+    private func runGitOperation(
+        label: String,
+        operation: @escaping (URL) async throws -> Void,
+        onSuccess: (() -> Void)? = nil
+    ) {
+        guard
+            let repoURL = repositoryContext?.repoURL,
+            isGitRepository,
+            isGitOperationInProgress == false
+        else {
+            return
+        }
+
+        persistEditorTextIfNeeded()
+        isGitOperationInProgress = true
+        activeGitOperationLabel = label
+
+        Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+
+            defer {
+                self.isGitOperationInProgress = false
+                self.activeGitOperationLabel = nil
+            }
+
+            do {
+                try await operation(repoURL)
+                onSuccess?()
+                await self.refreshRepositoryState(at: repoURL)
+            } catch {
+                self.apply(error: error)
+            }
+        }
+    }
+
+    private func reconcileCommitSelection() {
+        let currentFileIDs = Set(changedFiles.map(\.id))
+        let newFileIDs = currentFileIDs.subtracting(lastChangedFileIDs)
+
+        if lastChangedFileIDs.isEmpty {
+            selectedCommitFileIDs = currentFileIDs
+        } else {
+            selectedCommitFileIDs = selectedCommitFileIDs.intersection(currentFileIDs)
+            selectedCommitFileIDs.formUnion(newFileIDs)
+        }
+
+        lastChangedFileIDs = currentFileIDs
     }
 
     private func startRefreshTimer() {
@@ -931,6 +1251,10 @@ final class DashboardViewModel: ObservableObject {
     private func clearSelectedFileState() {
         selectedFilePath = nil
         selectedFile = nil
+        selectedCommitFileIDs = []
+        lastChangedFileIDs = []
+        commitSummary = ""
+        commitDescription = ""
         editorText = ""
         readOnlyPreviewText = ""
         clearSelectedDiffState()

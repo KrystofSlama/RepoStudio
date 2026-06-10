@@ -13,10 +13,12 @@ final class WorkspaceSession: Identifiable {
     var repositoryPathHint: String?
     var didAutoPromptRepositoryPicker = false
 
-    init(
-        repositoryPathHint: String? = nil,
-        repositoryService: RepositoryService = GitCLIRepositoryService()
-    ) {
+    init(repositoryPathHint: String? = nil) {
+        self.repositoryPathHint = repositoryPathHint
+        viewModel = DashboardViewModel(repositoryService: GitCLIRepositoryService())
+    }
+
+    init(repositoryPathHint: String? = nil, repositoryService: RepositoryService) {
         self.repositoryPathHint = repositoryPathHint
         viewModel = DashboardViewModel(repositoryService: repositoryService)
     }
@@ -146,6 +148,20 @@ struct WorkspaceView: View {
         persistWorkspaceState()
     }
 
+    func addRepositoryTab(url: URL, select: Bool, suppressOpenErrorAlert: Bool = false) {
+        let session = WorkspaceSession(repositoryPathHint: url.path)
+        sessions.append(session)
+        if select {
+            selectedSessionID = session.id
+        }
+
+        session.viewModel.openRepository(
+            at: url,
+            suppressErrorAlert: suppressOpenErrorAlert
+        )
+        persistWorkspaceState()
+    }
+
     func closeSession(_ id: WorkspaceSession.ID) {
         guard let index = sessions.firstIndex(where: { $0.id == id }) else {
             return
@@ -186,7 +202,7 @@ struct WorkspaceView: View {
             return
         }
 
-        addRepositoryTab(path: url.path, select: true)
+        addRepositoryTab(url: url, select: true)
     }
 
     func openRecentRepositoryInNewTab(path: String) {
@@ -230,6 +246,10 @@ struct WorkspaceView: View {
         if let repositoryPath = selectedSession.viewModel.repositoryContext?.repoURL.path {
             selectedSession.repositoryPathHint = repositoryPath
             persistWorkspaceState()
+            return
+        }
+
+        if selectedSession.viewModel.isOpeningRepository {
             return
         }
 

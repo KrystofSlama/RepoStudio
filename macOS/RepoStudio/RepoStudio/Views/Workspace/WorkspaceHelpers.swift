@@ -124,6 +124,11 @@ extension WorkspaceView {
                 .onChange(of: selectedSession.viewModel.repositoryContext?.repoURL.path, initial: false) {
                     syncSelectedSessionRepositoryPathHint()
                 }
+                .onChange(of: selectedSession.viewModel.isOpeningRepository, initial: false) {
+                    if selectedSession.viewModel.isOpeningRepository == false {
+                        promptForRepositoryIfNeeded()
+                    }
+                }
             } else {
                 VStack(spacing: 10) {
                     Image(systemName: "folder")
