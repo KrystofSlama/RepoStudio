@@ -150,6 +150,76 @@ struct RepoStudioTests {
         ))
     }
 
+    @Test func githubAccountStateReadsRemoteOwnerAndConfiguredUsername() async throws {
+        let repoURL = URL(fileURLWithPath: "/tmp/repostudio-test")
+        let recorder = GitCommandRecorder(responses: [
+            "remote get-url origin": "https://github.com/KrystofSlama/RepoStudio.git\n",
+            "config --get credential.https://github.com.username": "KrystofSlama\n"
+        ])
+        let service = GitCLIRepositoryService(commandRunner: { arguments in
+            try await recorder.run(arguments)
+        })
+
+        let state = try await service.fetchGitHubAccountState(at: repoURL)
+
+        #expect(state == GitHubAccountState(
+            remoteURL: "https://github.com/KrystofSlama/RepoStudio.git",
+            remoteOwner: "KrystofSlama",
+            credentialUsername: "KrystofSlama",
+            isGitHubRemote: true
+        ))
+    }
+
+    @Test func configuringGithubAccountWritesRepoCredentialUsername() async throws {
+        let repoURL = URL(fileURLWithPath: "/tmp/repostudio-test")
+        let recorder = GitCommandRecorder()
+        let service = GitCLIRepositoryService(commandRunner: { arguments in
+            try await recorder.run(arguments)
+        })
+
+        try await service.configureGitHubCredentialUsername("KrystofSlama", at: repoURL)
+
+        let commands = await recorder.recordedCommands()
+        #expect(commands == [
+            ["-C", repoURL.path, "config", "credential.https://github.com.username", "KrystofSlama"]
+        ])
+    }
+
+    @Test func savingGithubCredentialApprovesTokenThroughCredentialHelper() async throws {
+        let repoURL = URL(fileURLWithPath: "/tmp/repostudio-test")
+        let recorder = GitCommandRecorder()
+        let inputRecorder = GitInputCommandRecorder()
+        let service = GitCLIRepositoryService(
+            commandRunner: { arguments in
+                try await recorder.run(arguments)
+            },
+            inputCommandRunner: { arguments, standardInput in
+                try await inputRecorder.run(arguments, standardInput: standardInput)
+            }
+        )
+
+        try await service.saveGitHubCredential(username: "KrystofSlama", token: "github_pat_test", at: repoURL)
+
+        let commands = await recorder.recordedCommands()
+        #expect(commands == [
+            ["-C", repoURL.path, "config", "credential.https://github.com.username", "KrystofSlama"]
+        ])
+
+        let inputCommands = await inputRecorder.recordedCommands()
+        #expect(inputCommands == [
+            RecordedGitInputCommand(
+                arguments: ["-C", repoURL.path, "credential", "approve"],
+                standardInput: """
+                protocol=https
+                host=github.com
+                username=KrystofSlama
+                password=github_pat_test
+
+                """
+            )
+        ])
+    }
+
     @MainActor
     @Test func dashboardCommitRequiresSummaryAndClearsOnSuccess() async throws {
         let service = FakeRepositoryService()
@@ -207,6 +277,29 @@ actor GitCommandRecorder {
     }
 
     func recordedCommands() -> [[String]] {
+        commands
+    }
+}
+
+struct RecordedGitInputCommand: Equatable {
+    let arguments: [String]
+    let standardInput: String
+}
+
+actor GitInputCommandRecorder {
+    private var commands: [RecordedGitInputCommand] = []
+
+    func run(_ arguments: [String], standardInput: String) async throws -> String {
+        commands.append(
+            RecordedGitInputCommand(
+                arguments: arguments,
+                standardInput: standardInput
+            )
+        )
+        return ""
+    }
+
+    func recordedCommands() -> [RecordedGitInputCommand] {
         commands
     }
 }
@@ -283,6 +376,19 @@ final class FakeRepositoryService: RepositoryService {
             isPublished: true
         )
     }
+
+    func fetchGitHubAccountState(at url: URL) async throws -> GitHubAccountState {
+        GitHubAccountState(
+            remoteURL: "https://github.com/KrystofSlama/RepoStudio.git",
+            remoteOwner: "KrystofSlama",
+            credentialUsername: nil,
+            isGitHubRemote: true
+        )
+    }
+
+    func configureGitHubCredentialUsername(_ username: String?, at url: URL) async throws {}
+
+    func saveGitHubCredential(username: String, token: String, at url: URL) async throws {}
 }
 
 func waitForDashboardTasks() async {

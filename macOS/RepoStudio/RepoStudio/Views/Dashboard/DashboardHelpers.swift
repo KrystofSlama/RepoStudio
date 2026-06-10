@@ -272,6 +272,62 @@ struct NewBranchSheet: View {
     }
 }
 
+struct GitHubAccountSheet: View {
+    @ObservedObject var viewModel: DashboardViewModel
+
+    private var hasUsername: Bool {
+        viewModel.gitHubAccountUsername.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
+    private var hasToken: Bool {
+        viewModel.gitHubAccountToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("GitHub Account")
+                .font(.headline)
+
+            TextField("GitHub username", text: $viewModel.gitHubAccountUsername)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit {
+                    viewModel.applyGitHubAccountFromPrompt()
+                }
+
+            SecureField("Personal access token", text: $viewModel.gitHubAccountToken)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit {
+                    if hasToken {
+                        viewModel.applyGitHubCredentialFromPrompt()
+                    } else {
+                        viewModel.applyGitHubAccountFromPrompt()
+                    }
+                }
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    viewModel.cancelGitHubAccountSelection()
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Button("Use Account") {
+                    viewModel.applyGitHubAccountFromPrompt()
+                }
+                .disabled(hasUsername == false)
+
+                Button("Save Token") {
+                    viewModel.applyGitHubCredentialFromPrompt()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(hasUsername == false || hasToken == false)
+            }
+        }
+        .padding(18)
+        .frame(width: 400)
+    }
+}
+
 extension DashboardView {
     //MARK: -Subviews
     var sidebar: some View {
@@ -654,7 +710,8 @@ extension DashboardView {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "point.topleft.down.curvedto.point.bottomright.up")
-                    Text("Branch")
+                    Text(viewModel.repositoryContext?.branchName ?? "Branch")
+                        .lineLimit(1)
                     Image(systemName: "chevron.down")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -662,6 +719,48 @@ extension DashboardView {
             }
             .menuStyle(.button)
             .help("Switch or create branches")
+        }
+    }
+
+    struct GitHubAccountMenu: View {
+        @ObservedObject var viewModel: DashboardViewModel
+
+        var body: some View {
+            Menu {
+                if viewModel.suggestedGitHubUsernames.isEmpty == false {
+                    ForEach(viewModel.suggestedGitHubUsernames, id: \.self) { username in
+                        Button {
+                            viewModel.selectGitHubAccount(username: username)
+                        } label: {
+                            HStack {
+                                Text(username)
+                                if viewModel.gitHubAccountState.credentialUsername?.localizedCaseInsensitiveCompare(username) == .orderedSame {
+                                    Spacer()
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                        .disabled(viewModel.isGitOperationInProgress)
+                    }
+
+                    Divider()
+                }
+
+                Button("Other Account...") {
+                    viewModel.showGitHubAccountSheet()
+                }
+                .disabled(viewModel.isGitOperationInProgress)
+
+                Button("Use Default Git Credential") {
+                    viewModel.useDefaultGitHubAccount()
+                }
+                .disabled(viewModel.isGitOperationInProgress || viewModel.gitHubAccountState.credentialUsername == nil)
+            } label: {
+                Label(viewModel.gitHubAccountDisplayName, systemImage: "person.crop.circle")
+                    .lineLimit(1)
+            }
+            .menuStyle(.button)
+            .help(viewModel.gitHubAccountStatusText)
         }
     }
 
@@ -746,17 +845,15 @@ extension DashboardView {
                                 viewModel.performPrimarySyncAction()
                             } label: {
                                 Label(viewModel.primarySyncActionTitle, systemImage: viewModel.primarySyncActionSymbolName)
-                                    .labelStyle(.iconOnly)
                             }
-                            .buttonStyle(.borderless)
+                            .buttonStyle(.bordered)
                             .disabled(viewModel.canPerformPrimarySyncAction == false)
                             .help(viewModel.primarySyncActionTitle)
                         }
 
-                        Text(context.branchName)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                        if viewModel.gitHubAccountState.isGitHubRemote {
+                            GitHubAccountMenu(viewModel: viewModel)
+                        }
 
                         Text(viewModel.syncStatusText)
                             .font(.caption)

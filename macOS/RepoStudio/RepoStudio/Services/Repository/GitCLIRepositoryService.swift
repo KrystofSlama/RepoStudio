@@ -8,6 +8,7 @@ import Foundation
 //MARK: -Implementation
 struct GitCLIRepositoryService: RepositoryService {
     typealias GitCommandRunner = ([String]) async throws -> String
+    typealias GitInputCommandRunner = ([String], String) async throws -> String
 
     private static let gitExecutableCandidates: [String] = [
         "/opt/homebrew/bin/git",
@@ -20,15 +21,18 @@ struct GitCLIRepositoryService: RepositoryService {
     private let parser: GitStatusParser
     private let diffParser: GitUnifiedDiffParser
     private let commandRunner: GitCommandRunner
+    private let inputCommandRunner: GitInputCommandRunner
 
     init(
         parser: GitStatusParser = GitStatusParser(),
         diffParser: GitUnifiedDiffParser = GitUnifiedDiffParser(),
-        commandRunner: @escaping GitCommandRunner = GitCLIRepositoryService.defaultCommandRunner
+        commandRunner: @escaping GitCommandRunner = GitCLIRepositoryService.defaultCommandRunner,
+        inputCommandRunner: @escaping GitInputCommandRunner = GitCLIRepositoryService.defaultInputCommandRunner
     ) {
         self.parser = parser
         self.diffParser = diffParser
         self.commandRunner = commandRunner
+        self.inputCommandRunner = inputCommandRunner
     }
 
     func validateRepository(at url: URL) async throws {
@@ -132,7 +136,7 @@ struct GitCLIRepositoryService: RepositoryService {
             return
         }
 
-        try await runRepositoryCommand(
+        _ = try await runRepositoryCommand(
             in: url,
             command: ["add", "-A", "--"] + paths
         )
@@ -143,7 +147,7 @@ struct GitCLIRepositoryService: RepositoryService {
             commitCommand.append(contentsOf: ["-m", trimmedDescription])
         }
 
-        try await runRepositoryCommand(in: url, command: commitCommand)
+        _ = try await runRepositoryCommand(in: url, command: commitCommand)
     }
 
     func createBranch(named branchName: String, at url: URL) async throws {
@@ -152,7 +156,7 @@ struct GitCLIRepositoryService: RepositoryService {
             return
         }
 
-        try await runRepositoryCommand(
+        _ = try await runRepositoryCommand(
             in: url,
             command: ["switch", "-c", trimmedBranchName]
         )
@@ -164,7 +168,7 @@ struct GitCLIRepositoryService: RepositoryService {
             return
         }
 
-        try await runRepositoryCommand(
+        _ = try await runRepositoryCommand(
             in: url,
             command: ["switch", trimmedBranchName]
         )
@@ -180,14 +184,14 @@ struct GitCLIRepositoryService: RepositoryService {
     }
 
     func pullCurrentBranch(at url: URL) async throws {
-        try await runRepositoryCommand(
+        _ = try await runRepositoryCommand(
             in: url,
             command: ["pull", "--ff-only"]
         )
     }
 
     func pushCurrentBranch(at url: URL) async throws {
-        try await runRepositoryCommand(
+        _ = try await runRepositoryCommand(
             in: url,
             command: ["push"]
         )
@@ -200,7 +204,7 @@ struct GitCLIRepositoryService: RepositoryService {
         }
 
         let currentBranchName = try await fetchBranchName(in: url)
-        try await runRepositoryCommand(
+        _ = try await runRepositoryCommand(
             in: url,
             command: ["push", "-u", trimmedRemoteName, currentBranchName]
         )
@@ -236,6 +240,80 @@ struct GitCLIRepositoryService: RepositoryService {
             aheadCount: counts.ahead,
             behindCount: counts.behind,
             isPublished: true
+        )
+    }
+
+    func fetchGitHubAccountState(at url: URL) async throws -> GitHubAccountState {
+        guard let remoteURL = try await runOptionalRepositoryCommand(
+            in: url,
+            command: ["remote", "get-url", "origin"]
+        )?.trimmingCharacters(in: .whitespacesAndNewlines), remoteURL.isEmpty == false else {
+            return .unavailable
+        }
+
+        let remoteOwner = parseGitHubOwner(from: remoteURL)
+        let isGitHubRemote = remoteOwner != nil
+        guard isGitHubRemote else {
+            return GitHubAccountState(
+                remoteURL: remoteURL,
+                remoteOwner: nil,
+                credentialUsername: nil,
+                isGitHubRemote: false
+            )
+        }
+
+        let credentialUsername = try await fetchConfiguredGitHubCredentialUsername(in: url)
+
+        return GitHubAccountState(
+            remoteURL: remoteURL,
+            remoteOwner: remoteOwner,
+            credentialUsername: credentialUsername,
+            isGitHubRemote: true
+        )
+    }
+
+    func configureGitHubCredentialUsername(_ username: String?, at url: URL) async throws {
+        let trimmedUsername = username?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        if trimmedUsername.isEmpty {
+            do {
+                _ = try await runRepositoryCommand(
+                    in: url,
+                    command: ["config", "--unset", "credential.https://github.com.username"]
+                )
+            } catch {
+                // It is fine if the repo did not have a GitHub username override yet.
+            }
+            return
+        }
+
+        _ = try await runRepositoryCommand(
+            in: url,
+            command: ["config", "credential.https://github.com.username", trimmedUsername]
+        )
+    }
+
+    func saveGitHubCredential(username: String, token: String, at url: URL) async throws {
+        let trimmedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedUsername.isEmpty == false, trimmedToken.isEmpty == false else {
+            return
+        }
+
+        try await configureGitHubCredentialUsername(trimmedUsername, at: url)
+
+        let credentialInput = """
+        protocol=https
+        host=github.com
+        username=\(trimmedUsername)
+        password=\(trimmedToken)
+
+        """
+
+        _ = try await runRepositoryCommand(
+            in: url,
+            command: ["credential", "approve"],
+            standardInput: credentialInput
         )
     }
 
@@ -339,9 +417,70 @@ struct GitCLIRepositoryService: RepositoryService {
             || lowered.contains("@{u}")
     }
 
+    private func fetchConfiguredGitHubCredentialUsername(in repoURL: URL) async throws -> String? {
+        if let specificUsername = try await runOptionalRepositoryCommand(
+            in: repoURL,
+            command: ["config", "--get", "credential.https://github.com.username"]
+        )?.trimmingCharacters(in: .whitespacesAndNewlines), specificUsername.isEmpty == false {
+            return specificUsername
+        }
+
+        if let genericUsername = try await runOptionalRepositoryCommand(
+            in: repoURL,
+            command: ["config", "--get", "credential.username"]
+        )?.trimmingCharacters(in: .whitespacesAndNewlines), genericUsername.isEmpty == false {
+            return genericUsername
+        }
+
+        return nil
+    }
+
+    private func parseGitHubOwner(from remoteURL: String) -> String? {
+        let trimmedRemoteURL = remoteURL.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let url = URL(string: trimmedRemoteURL),
+           url.host?.localizedCaseInsensitiveCompare("github.com") == .orderedSame {
+            return firstPathComponent(from: url.path)
+        }
+
+        if trimmedRemoteURL.hasPrefix("git@github.com:") {
+            let path = String(trimmedRemoteURL.dropFirst("git@github.com:".count))
+            return firstPathComponent(from: path)
+        }
+
+        if trimmedRemoteURL.localizedCaseInsensitiveContains("@github.com/"),
+           let path = trimmedRemoteURL.components(separatedBy: "@github.com/").last {
+            return firstPathComponent(from: path)
+        }
+
+        return nil
+    }
+
+    private func firstPathComponent(from path: String) -> String? {
+        let normalizedPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let firstComponent = normalizedPath.split(separator: "/").first.map(String.init)
+        return firstComponent?.isEmpty == false ? firstComponent : nil
+    }
+
     private func runRepositoryCommand(in repoURL: URL, command: [String]) async throws -> String {
         let arguments = ["-C", repoURL.path] + command
         return try await runGitCommand(arguments: arguments)
+    }
+
+    private func runRepositoryCommand(in repoURL: URL, command: [String], standardInput: String) async throws -> String {
+        let arguments = ["-C", repoURL.path] + command
+        return try await runGitCommand(arguments: arguments, standardInput: standardInput)
+    }
+
+    private func runOptionalRepositoryCommand(in repoURL: URL, command: [String]) async throws -> String? {
+        do {
+            return try await runRepositoryCommand(in: repoURL, command: command)
+        } catch let error as DashboardError {
+            guard case .gitCommandFailed = error else {
+                throw error
+            }
+            return nil
+        }
     }
 
     private func parsePathLines(_ output: String) -> [String] {
@@ -416,6 +555,19 @@ struct GitCLIRepositoryService: RepositoryService {
         }
     }
 
+    private func runGitCommand(arguments: [String], standardInput: String) async throws -> String {
+        do {
+            return try await inputCommandRunner(arguments, standardInput)
+        } catch let dashboardError as DashboardError {
+            throw dashboardError
+        } catch {
+            throw DashboardError.gitCommandFailed(
+                command: "git \(arguments.joined(separator: " "))",
+                message: error.localizedDescription
+            )
+        }
+    }
+
     private static func defaultCommandRunner(arguments: [String]) async throws -> String {
         var attemptedPaths = Set<String>()
         let fileManager = FileManager.default
@@ -455,6 +607,49 @@ struct GitCLIRepositoryService: RepositoryService {
         throw DashboardError.missingXcodeCommandLineTools(details: fallbackMessage)
     }
 
+    private static func defaultInputCommandRunner(arguments: [String], standardInput: String) async throws -> String {
+        var attemptedPaths = Set<String>()
+        let fileManager = FileManager.default
+        var candidatePaths = gitExecutableCandidates.filter { fileManager.isExecutableFile(atPath: $0) }
+        candidatePaths.append(contentsOf: gitExecutableCandidates)
+        candidatePaths = candidatePaths.filter { attemptedPaths.insert($0).inserted }
+
+        var fallbackError: DashboardError = .gitCommandFailed(
+            command: "git \(arguments.joined(separator: " "))",
+            message: "Unable to locate a runnable Git executable."
+        )
+
+        for executablePath in candidatePaths {
+            do {
+                return try await runProcess(
+                    executablePath: executablePath,
+                    arguments: arguments,
+                    standardInput: standardInput
+                )
+            } catch let dashboardError as DashboardError {
+                fallbackError = dashboardError
+                if shouldTryNextExecutable(for: dashboardError) {
+                    continue
+                }
+                throw dashboardError
+            } catch {
+                fallbackError = .gitCommandFailed(
+                    command: "git \(arguments.joined(separator: " "))",
+                    message: error.localizedDescription
+                )
+            }
+        }
+
+        let fallbackMessage: String
+        if case let .gitCommandFailed(_, message) = fallbackError, message.isEmpty == false {
+            fallbackMessage = message
+        } else {
+            fallbackMessage = "Unable to locate a runnable Git executable."
+        }
+
+        throw DashboardError.missingXcodeCommandLineTools(details: fallbackMessage)
+    }
+
     private static func commandLineToolsLikelyMissing(_ message: String) -> Bool {
         let lowered = message.lowercased()
         return lowered.contains("xcode-select")
@@ -465,15 +660,30 @@ struct GitCLIRepositoryService: RepositoryService {
     }
 
     private static func runProcess(executablePath: String, arguments: [String]) async throws -> String {
+        try await runProcess(executablePath: executablePath, arguments: arguments, standardInput: nil)
+    }
+
+    private static func runProcess(executablePath: String, arguments: [String], standardInput: String?) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executablePath)
             process.arguments = arguments
+            var environment = ProcessInfo.processInfo.environment
+            environment["GIT_TERMINAL_PROMPT"] = "0"
+            process.environment = environment
 
             let standardOutputPipe = Pipe()
             let standardErrorPipe = Pipe()
             process.standardOutput = standardOutputPipe
             process.standardError = standardErrorPipe
+            let standardInputPipe: Pipe?
+            if standardInput != nil {
+                let pipe = Pipe()
+                process.standardInput = pipe
+                standardInputPipe = pipe
+            } else {
+                standardInputPipe = nil
+            }
 
             process.terminationHandler = { task in
                 let outputData = standardOutputPipe.fileHandleForReading.readDataToEndOfFile()
@@ -498,6 +708,12 @@ struct GitCLIRepositoryService: RepositoryService {
 
             do {
                 try process.run()
+                if let standardInput,
+                   let inputData = standardInput.data(using: .utf8),
+                   let fileHandle = standardInputPipe?.fileHandleForWriting {
+                    fileHandle.write(inputData)
+                    try? fileHandle.close()
+                }
             } catch {
                 continuation.resume(
                     throwing: DashboardError.gitCommandFailed(

@@ -73,6 +73,9 @@ struct DashboardView: View {
         .sheet(isPresented: $viewModel.isNewBranchSheetPresented) {
             NewBranchSheet(viewModel: viewModel)
         }
+        .sheet(isPresented: $viewModel.isGitHubAccountSheetPresented) {
+            GitHubAccountSheet(viewModel: viewModel)
+        }
         .alert(
             "Repository Error",
             isPresented: Binding(
@@ -81,6 +84,7 @@ struct DashboardView: View {
                     if value == false {
                         viewModel.errorMessage = nil
                         viewModel.shouldOfferInstallToolsAction = false
+                        viewModel.shouldOfferGitHubTokenAction = false
                     }
                 }
             )
@@ -91,9 +95,19 @@ struct DashboardView: View {
                 }
             }
 
+            if viewModel.shouldOfferGitHubTokenAction {
+                Button("Add Token") {
+                    viewModel.errorMessage = nil
+                    viewModel.shouldOfferInstallToolsAction = false
+                    viewModel.shouldOfferGitHubTokenAction = false
+                    viewModel.showGitHubAccountSheet()
+                }
+            }
+
             Button("OK", role: .cancel) {
                 viewModel.errorMessage = nil
                 viewModel.shouldOfferInstallToolsAction = false
+                viewModel.shouldOfferGitHubTokenAction = false
             }
         } message: {
             Text(viewModel.errorMessage ?? "Unknown error")

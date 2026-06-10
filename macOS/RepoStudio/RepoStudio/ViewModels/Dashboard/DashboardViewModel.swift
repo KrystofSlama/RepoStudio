@@ -59,6 +59,8 @@ final class DashboardViewModel: ObservableObject {
     @Published private(set) var selectedCommitFileIDs: Set<String> = []
     @Published private(set) var branches: [GitBranch] = []
     @Published private(set) var remoteTrackingState = GitRemoteTrackingState.unpublished
+    @Published private(set) var gitHubAccountState = GitHubAccountState.unavailable
+    @Published private(set) var recentGitHubUsernames: [String] = []
     @Published private(set) var activeGitOperationLabel: String?
     @Published private(set) var isGitOperationInProgress = false
 
@@ -73,10 +75,14 @@ final class DashboardViewModel: ObservableObject {
     @Published var commitDescription = ""
     @Published var isNewBranchSheetPresented = false
     @Published var newBranchName = ""
+    @Published var isGitHubAccountSheetPresented = false
+    @Published var gitHubAccountUsername = ""
+    @Published var gitHubAccountToken = ""
     @Published private(set) var selectedDiffLines: [DiffLine] = []
     @Published private(set) var isDiffLoading = false
     @Published var errorMessage: String?
     @Published var shouldOfferInstallToolsAction = false
+    @Published var shouldOfferGitHubTokenAction = false
 
     private let repositoryService: RepositoryService
     private var refreshTimer: Timer?
@@ -95,6 +101,7 @@ final class DashboardViewModel: ObservableObject {
     private var lastChangedFileIDs: Set<String> = []
 
     private let recentRepositoriesKey = "repoDraft.recentRepositories"
+    private let recentGitHubUsernamesKey = "repoDraft.recentGitHubUsernames"
     private let repositoryBookmarksKey = "repoDraft.repositoryBookmarks"
     private let noGitRepositoryLabel = "No git repository"
 
@@ -371,6 +378,44 @@ final class DashboardViewModel: ObservableObject {
         isGitRepository && isGitOperationInProgress == false && repositoryContext != nil
     }
 
+    var gitHubAccountDisplayName: String {
+        guard gitHubAccountState.isGitHubRemote else {
+            return "GitHub"
+        }
+
+        if let credentialUsername = gitHubAccountState.credentialUsername, credentialUsername.isEmpty == false {
+            return credentialUsername
+        }
+
+        return "Default"
+    }
+
+    var gitHubAccountStatusText: String {
+        guard gitHubAccountState.isGitHubRemote else {
+            return "No GitHub remote"
+        }
+
+        if let credentialUsername = gitHubAccountState.credentialUsername, credentialUsername.isEmpty == false {
+            return "Using \(credentialUsername)"
+        }
+
+        if let remoteOwner = gitHubAccountState.remoteOwner {
+            return "Default account · repo owner \(remoteOwner)"
+        }
+
+        return "Default account"
+    }
+
+    var suggestedGitHubUsernames: [String] {
+        var usernames: [String] = []
+        appendUniqueUsername(gitHubAccountState.remoteOwner, to: &usernames)
+        appendUniqueUsername(gitHubAccountState.credentialUsername, to: &usernames)
+        for username in recentGitHubUsernames {
+            appendUniqueUsername(username, to: &usernames)
+        }
+        return usernames
+    }
+
     var windowTitle: String {
         repositoryContext?.repoName ?? "RepoStudio"
     }
@@ -410,6 +455,7 @@ final class DashboardViewModel: ObservableObject {
     init(repositoryService: RepositoryService) {
         self.repositoryService = repositoryService
         loadRecentRepositories()
+        loadRecentGitHubUsernames()
     }
 
     deinit {
@@ -614,6 +660,68 @@ final class DashboardViewModel: ObservableObject {
         refreshRepositoryState()
     }
 
+    func showGitHubAccountSheet() {
+        gitHubAccountUsername = gitHubAccountState.credentialUsername ?? gitHubAccountState.remoteOwner ?? ""
+        gitHubAccountToken = ""
+        isGitHubAccountSheetPresented = true
+    }
+
+    func cancelGitHubAccountSelection() {
+        gitHubAccountUsername = ""
+        gitHubAccountToken = ""
+        isGitHubAccountSheetPresented = false
+    }
+
+    func applyGitHubAccountFromPrompt() {
+        let username = gitHubAccountUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard username.isEmpty == false else {
+            return
+        }
+
+        isGitHubAccountSheetPresented = false
+        gitHubAccountUsername = ""
+        gitHubAccountToken = ""
+        selectGitHubAccount(username: username)
+    }
+
+    func applyGitHubCredentialFromPrompt() {
+        let username = gitHubAccountUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = gitHubAccountToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard username.isEmpty == false, token.isEmpty == false else {
+            return
+        }
+
+        isGitHubAccountSheetPresented = false
+        gitHubAccountUsername = ""
+        gitHubAccountToken = ""
+        shouldOfferGitHubTokenAction = false
+
+        runGitOperation(label: "Saving token...") { [repositoryService] repoURL in
+            try await repositoryService.saveGitHubCredential(username: username, token: token, at: repoURL)
+        } onSuccess: { [weak self] in
+            self?.addRecentGitHubUsername(username)
+        }
+    }
+
+    func selectGitHubAccount(username: String) {
+        let trimmedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedUsername.isEmpty == false else {
+            return
+        }
+
+        runGitOperation(label: "Switching account...") { [repositoryService] repoURL in
+            try await repositoryService.configureGitHubCredentialUsername(trimmedUsername, at: repoURL)
+        } onSuccess: { [weak self] in
+            self?.addRecentGitHubUsername(trimmedUsername)
+        }
+    }
+
+    func useDefaultGitHubAccount() {
+        runGitOperation(label: "Switching account...") { [repositoryService] repoURL in
+            try await repositoryService.configureGitHubCredentialUsername(nil, at: repoURL)
+        }
+    }
+
     func installXcodeCommandLineTools() {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcode-select")
@@ -685,6 +793,7 @@ final class DashboardViewModel: ObservableObject {
             folderWorkspaceReason = "No git repository."
             errorMessage = nil
             shouldOfferInstallToolsAction = false
+            shouldOfferGitHubTokenAction = false
             addRecentRepository(securedURL.path)
             saveBookmarkIfPossible(for: securedURL)
 
@@ -718,10 +827,12 @@ final class DashboardViewModel: ObservableObject {
             folderWorkspaceReason = reason
             errorMessage = nil
             shouldOfferInstallToolsAction = false
+            shouldOfferGitHubTokenAction = false
             changedFiles = []
             repositoryFiles = files
             branches = []
             remoteTrackingState = .unpublished
+            gitHubAccountState = .unavailable
             reconcileCommitSelection()
             addRecentRepository(url.path)
             saveBookmarkIfPossible(for: url)
@@ -748,9 +859,11 @@ final class DashboardViewModel: ObservableObject {
         repositoryFiles = []
         branches = []
         remoteTrackingState = .unpublished
+        gitHubAccountState = .unavailable
         reconcileCommitSelection()
         errorMessage = nil
         shouldOfferInstallToolsAction = false
+        shouldOfferGitHubTokenAction = false
     }
 
     private func refreshRepositoryState(at repoURL: URL) async {
@@ -768,12 +881,14 @@ final class DashboardViewModel: ObservableObject {
                 let repositoryFiles = try await repositoryService.fetchRepositoryFiles(at: repoURL)
                 let branches = try await repositoryService.fetchBranches(at: repoURL)
                 let remoteTrackingState = try await repositoryService.fetchRemoteTrackingState(at: repoURL)
+                let gitHubAccountState = try await repositoryService.fetchGitHubAccountState(at: repoURL)
 
                 self.repositoryContext = context
                 self.changedFiles = files
                 self.repositoryFiles = repositoryFiles
                 self.branches = branches
                 self.remoteTrackingState = remoteTrackingState
+                self.gitHubAccountState = gitHubAccountState
                 reconcileCommitSelection()
             } else {
                 let files = try fetchFolderFiles(at: repoURL)
@@ -786,12 +901,14 @@ final class DashboardViewModel: ObservableObject {
                 self.repositoryFiles = files
                 self.branches = []
                 self.remoteTrackingState = .unpublished
+                self.gitHubAccountState = .unavailable
                 reconcileCommitSelection()
             }
 
             reconcileSelectedFile()
             errorMessage = nil
             shouldOfferInstallToolsAction = false
+            shouldOfferGitHubTokenAction = false
         } catch {
             apply(error: error)
         }
@@ -947,6 +1064,7 @@ final class DashboardViewModel: ObservableObject {
             loadedContentSelectionKey = nil
             errorMessage = DashboardError.fileReadFailed(fileURL.path).localizedDescription
             shouldOfferInstallToolsAction = false
+            shouldOfferGitHubTokenAction = false
         }
     }
 
@@ -1063,6 +1181,7 @@ final class DashboardViewModel: ObservableObject {
         } catch {
             errorMessage = DashboardError.fileWriteFailed(fileURL.path).localizedDescription
             shouldOfferInstallToolsAction = false
+            shouldOfferGitHubTokenAction = false
         }
     }
 
@@ -1075,6 +1194,36 @@ final class DashboardViewModel: ObservableObject {
         paths.insert(path, at: 0)
         recentRepositoryPaths = Array(paths.prefix(8))
         UserDefaults.standard.set(recentRepositoryPaths, forKey: recentRepositoriesKey)
+    }
+
+    private func loadRecentGitHubUsernames() {
+        recentGitHubUsernames = UserDefaults.standard.stringArray(forKey: recentGitHubUsernamesKey) ?? []
+    }
+
+    private func addRecentGitHubUsername(_ username: String) {
+        let trimmedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedUsername.isEmpty == false else {
+            return
+        }
+
+        var usernames = recentGitHubUsernames.filter {
+            $0.localizedCaseInsensitiveCompare(trimmedUsername) != .orderedSame
+        }
+        usernames.insert(trimmedUsername, at: 0)
+        recentGitHubUsernames = Array(usernames.prefix(8))
+        UserDefaults.standard.set(recentGitHubUsernames, forKey: recentGitHubUsernamesKey)
+    }
+
+    private func appendUniqueUsername(_ username: String?, to usernames: inout [String]) {
+        guard let username = username?.trimmingCharacters(in: .whitespacesAndNewlines), username.isEmpty == false else {
+            return
+        }
+
+        guard usernames.contains(where: { $0.localizedCaseInsensitiveCompare(username) == .orderedSame }) == false else {
+            return
+        }
+
+        usernames.append(username)
     }
 
     private func filterChangedFiles(_ files: [ChangedFile]) -> [ChangedFile] {
@@ -1142,13 +1291,46 @@ final class DashboardViewModel: ObservableObject {
 
     private func apply(error: Error) {
         if let dashboardError = error as? DashboardError {
-            errorMessage = dashboardError.localizedDescription
+            errorMessage = userFacingMessage(for: dashboardError)
             shouldOfferInstallToolsAction = dashboardError.isMissingXcodeCommandLineTools
+            shouldOfferGitHubTokenAction = isGitHubAuthenticationError(dashboardError)
             return
         }
 
         errorMessage = error.localizedDescription
         shouldOfferInstallToolsAction = false
+        shouldOfferGitHubTokenAction = false
+    }
+
+    private func userFacingMessage(for error: DashboardError) -> String {
+        guard isGitHubAuthenticationError(error) else {
+            return error.localizedDescription
+        }
+
+        let username = gitHubAccountState.credentialUsername ?? gitHubAccountState.remoteOwner ?? "this account"
+        return """
+        GitHub needs a saved token for \(username).
+        Add a token for this account, then try the Git operation again.
+
+        Details: \(error.localizedDescription)
+        """
+    }
+
+    private func isGitHubAuthenticationError(_ error: DashboardError) -> Bool {
+        guard case let .gitCommandFailed(_, message) = error else {
+            return false
+        }
+
+        let lowered = message.lowercased()
+        return lowered.contains("github.com")
+            && (
+                lowered.contains("could not read password")
+                    || lowered.contains("could not read username")
+                    || lowered.contains("terminal prompts disabled")
+                    || lowered.contains("authentication failed")
+                    || lowered.contains("permission to")
+                    || lowered.contains("returned error: 403")
+            )
     }
 
     private func shouldOpenAsFolderWorkspace(for error: Error) -> Bool {
@@ -1255,6 +1437,10 @@ final class DashboardViewModel: ObservableObject {
         lastChangedFileIDs = []
         commitSummary = ""
         commitDescription = ""
+        gitHubAccountUsername = ""
+        gitHubAccountToken = ""
+        isGitHubAccountSheetPresented = false
+        shouldOfferGitHubTokenAction = false
         editorText = ""
         readOnlyPreviewText = ""
         clearSelectedDiffState()

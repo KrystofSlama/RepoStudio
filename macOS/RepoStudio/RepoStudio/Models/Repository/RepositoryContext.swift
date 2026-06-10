@@ -34,3 +34,17 @@ struct GitRemoteTrackingState: Hashable {
         isPublished: false
     )
 }
+
+struct GitHubAccountState: Hashable {
+    let remoteURL: String?
+    let remoteOwner: String?
+    let credentialUsername: String?
+    let isGitHubRemote: Bool
+
+    static let unavailable = GitHubAccountState(
+        remoteURL: nil,
+        remoteOwner: nil,
+        credentialUsername: nil,
+        isGitHubRemote: false
+    )
+}
