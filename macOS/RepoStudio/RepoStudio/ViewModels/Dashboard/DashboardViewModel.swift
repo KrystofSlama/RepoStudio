@@ -101,7 +101,7 @@ final class DashboardViewModel: ObservableObject {
     private var lastChangedFileIDs: Set<String> = []
 
     private let recentRepositoriesKey = "repoDraft.recentRepositories"
-    private let recentGitHubUsernamesKey = "repoDraft.recentGitHubUsernames"
+    private let recentGitHubUsernamesKey = AppPreferenceKeys.recentGitHubUsernames
     private let repositoryBookmarksKey = "repoDraft.repositoryBookmarks"
     private let noGitRepositoryLabel = "No git repository"
 
@@ -378,6 +378,15 @@ final class DashboardViewModel: ObservableObject {
         isGitRepository && isGitOperationInProgress == false && repositoryContext != nil
     }
 
+    private var defaultPublishRemoteName: String {
+        if let configuredRemote = UserDefaults.standard.string(forKey: AppPreferenceKeys.defaultRemoteName)?
+            .trimmingCharacters(in: .whitespacesAndNewlines), configuredRemote.isEmpty == false {
+            return configuredRemote
+        }
+
+        return "origin"
+    }
+
     var gitHubAccountDisplayName: String {
         guard gitHubAccountState.isGitHubRemote else {
             return "GitHub"
@@ -644,8 +653,9 @@ final class DashboardViewModel: ObservableObject {
         }
 
         if remoteTrackingState.isPublished == false {
+            let remoteName = defaultPublishRemoteName
             runGitOperation(label: "Publishing...") { [repositoryService] repoURL in
-                try await repositoryService.publishCurrentBranch(remoteName: "origin", at: repoURL)
+                try await repositoryService.publishCurrentBranch(remoteName: remoteName, at: repoURL)
             }
             return
         }
@@ -742,6 +752,10 @@ final class DashboardViewModel: ObservableObject {
             Open Terminal and run: xcode-select --install
             """
         }
+    }
+
+    func reloadApplicationSettings() {
+        loadRecentGitHubUsernames()
     }
 
     func toggleInspector() {

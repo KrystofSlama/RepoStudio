@@ -333,6 +333,54 @@ struct GitCLIRepositoryService: RepositoryService {
         )
     }
 
+    func configureGlobalGitHubCredentialUsername(_ username: String?) async throws {
+        let trimmedUsername = username?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        if trimmedUsername.isEmpty {
+            _ = try await runGitCommand(
+                arguments: ["config", "--global", "--unset", "credential.https://github.com.username"]
+            )
+            return
+        }
+
+        _ = try await runGitCommand(
+            arguments: ["config", "--global", "credential.https://github.com.username", trimmedUsername]
+        )
+    }
+
+    func saveGlobalGitHubCredential(username: String, token: String, setAsDefault: Bool) async throws {
+        let trimmedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedUsername.isEmpty == false else {
+            return
+        }
+
+        if setAsDefault {
+            try await configureGlobalGitHubCredentialUsername(trimmedUsername)
+        }
+
+        guard trimmedToken.isEmpty == false else {
+            return
+        }
+
+        _ = try await runGitCommand(
+            arguments: ["credential", "approve"],
+            standardInput: gitHubCredentialInput(username: trimmedUsername, token: trimmedToken)
+        )
+    }
+
+    func rejectGlobalGitHubCredential(username: String) async throws {
+        let trimmedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedUsername.isEmpty == false else {
+            return
+        }
+
+        _ = try await runGitCommand(
+            arguments: ["credential", "reject"],
+            standardInput: gitHubCredentialInput(username: trimmedUsername, token: nil)
+        )
+    }
+
     private func fetchBranchName(in repoURL: URL) async throws -> String {
         do {
             let branchOutput = try await runRepositoryCommand(
@@ -478,6 +526,20 @@ struct GitCLIRepositoryService: RepositoryService {
         let normalizedPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let firstComponent = normalizedPath.split(separator: "/").first.map(String.init)
         return firstComponent?.isEmpty == false ? firstComponent : nil
+    }
+
+    private func gitHubCredentialInput(username: String, token: String?) -> String {
+        var lines = [
+            "protocol=https",
+            "host=github.com",
+            "username=\(username)"
+        ]
+
+        if let token, token.isEmpty == false {
+            lines.append("password=\(token)")
+        }
+
+        return lines.joined(separator: "\n") + "\n\n"
     }
 
     private func runRepositoryCommand(in repoURL: URL, command: [String]) async throws -> String {

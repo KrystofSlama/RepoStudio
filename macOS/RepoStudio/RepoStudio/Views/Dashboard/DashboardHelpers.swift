@@ -75,6 +75,13 @@ struct DashboardToolbar: ToolbarContent {
 
     var body: some ToolbarContent {
         ToolbarItemGroup {
+            Button {
+                RepoStudioSettingsPresenter.showSettings()
+            } label: {
+                Label("Settings", systemImage: "gearshape")
+            }
+            .help("Settings")
+
             Picker("Mode", selection: Binding(
                 get: { viewModel.canvasMode },
                 set: { viewModel.setCanvasMode($0) }

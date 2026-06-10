@@ -46,6 +46,7 @@ extension FocusedValues {
 struct WorkspaceView: View {
     //MARK: -State
     @Environment(\.scenePhase) var scenePhase
+    @AppStorage(AppPreferenceKeys.appearanceMode) var appearanceModeRawValue = AppAppearanceMode.system.rawValue
     @State var sessions: [WorkspaceSession] = []
     @State var selectedSessionID: WorkspaceSession.ID?
     @State var didBootstrapWorkspace = false
@@ -57,6 +58,9 @@ struct WorkspaceView: View {
     //MARK: -Body
     var body: some View {
         workspaceCanvas
+            .preferredColorScheme(
+                (AppAppearanceMode(rawValue: appearanceModeRawValue) ?? .system).colorScheme
+            )
             .onAppear {
                 bootstrapWorkspaceIfNeeded()
             }
