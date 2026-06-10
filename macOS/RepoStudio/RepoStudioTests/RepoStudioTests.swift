@@ -7,6 +7,7 @@
 
 import Testing
 import Foundation
+import AppKit
 @testable import RepoStudio
 
 struct RepoStudioTests {
@@ -113,7 +114,7 @@ struct RepoStudioTests {
             *\trefs/heads/main\tmain
              \trefs/heads/feature/git-ui\tfeature/git-ui
              \trefs/remotes/origin/main\torigin/main
-             \trefs/remotes/origin/HEAD\torigin/HEAD
+             \trefs/remotes/origin/HEAD\torigin
 
             """
         ])
@@ -128,6 +129,68 @@ struct RepoStudioTests {
             GitBranch(name: "feature/git-ui", isCurrent: false, isRemote: false),
             GitBranch(name: "origin/main", isCurrent: false, isRemote: true)
         ])
+    }
+
+    @Test func refreshingRemoteBranchesFetchesAndPrunesWhenRemotesExist() async throws {
+        let repoURL = URL(fileURLWithPath: "/tmp/repostudio-test")
+        let recorder = GitCommandRecorder(responses: [
+            "remote": "origin\n"
+        ])
+        let service = GitCLIRepositoryService(commandRunner: { arguments in
+            try await recorder.run(arguments)
+        })
+
+        try await service.refreshRemoteBranches(at: repoURL)
+
+        let commands = await recorder.recordedCommands()
+        #expect(commands == [
+            ["-C", repoURL.path, "remote"],
+            ["-C", repoURL.path, "fetch", "--all", "--prune", "--quiet"]
+        ])
+    }
+
+    @Test func refreshingRemoteBranchesSkipsFetchWhenNoRemotesExist() async throws {
+        let repoURL = URL(fileURLWithPath: "/tmp/repostudio-test")
+        let recorder = GitCommandRecorder(responses: [
+            "remote": ""
+        ])
+        let service = GitCLIRepositoryService(commandRunner: { arguments in
+            try await recorder.run(arguments)
+        })
+
+        try await service.refreshRemoteBranches(at: repoURL)
+
+        let commands = await recorder.recordedCommands()
+        #expect(commands == [
+            ["-C", repoURL.path, "remote"]
+        ])
+    }
+
+    @MainActor
+    @Test func appMenuDeduplicationKeepsBottomSettingsItem() throws {
+        let mainMenu = NSMenu()
+        let appMenuItem = NSMenuItem(title: "RepoStudio", action: nil, keyEquivalent: "")
+        let appMenu = NSMenu()
+        appMenuItem.submenu = appMenu
+        mainMenu.addItem(appMenuItem)
+
+        let firstSettingsItem = NSMenuItem(title: "Settings...", action: nil, keyEquivalent: ",")
+        firstSettingsItem.representedObject = "first"
+        let secondSettingsItem = NSMenuItem(title: "Settings...", action: nil, keyEquivalent: ",")
+        secondSettingsItem.representedObject = "second"
+
+        appMenu.addItem(NSMenuItem(title: "About RepoStudio", action: nil, keyEquivalent: ""))
+        appMenu.addItem(.separator())
+        appMenu.addItem(firstSettingsItem)
+        appMenu.addItem(secondSettingsItem)
+        appMenu.addItem(.separator())
+        appMenu.addItem(NSMenuItem(title: "Services", action: nil, keyEquivalent: ""))
+
+        RepoStudioAppDelegate.removeDuplicateSettingsMenuItems(in: mainMenu)
+
+        let settingsItems = appMenu.items.filter { $0.title == "Settings..." }
+        #expect(settingsItems.count == 1)
+        #expect(settingsItems.first?.representedObject as? String == "second")
     }
 
     @Test func remoteTrackingParsingMapsAheadBehindCounts() async throws {
@@ -355,6 +418,8 @@ final class FakeRepositoryService: RepositoryService {
     func createBranch(named branchName: String, at url: URL) async throws {}
 
     func checkoutBranch(named branchName: String, at url: URL) async throws {}
+
+    func refreshRemoteBranches(at url: URL) async throws {}
 
     func fetchBranches(at url: URL) async throws -> [GitBranch] {
         [

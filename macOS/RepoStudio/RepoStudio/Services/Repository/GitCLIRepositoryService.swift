@@ -174,6 +174,22 @@ struct GitCLIRepositoryService: RepositoryService {
         )
     }
 
+    func refreshRemoteBranches(at url: URL) async throws {
+        let remoteOutput = try await runRepositoryCommand(
+            in: url,
+            command: ["remote"]
+        )
+        let remoteNames = parsePathLines(remoteOutput)
+        guard remoteNames.isEmpty == false else {
+            return
+        }
+
+        _ = try await runRepositoryCommand(
+            in: url,
+            command: ["fetch", "--all", "--prune", "--quiet"]
+        )
+    }
+
     func fetchBranches(at url: URL) async throws -> [GitBranch] {
         let output = try await runRepositoryCommand(
             in: url,
@@ -367,7 +383,9 @@ struct GitCLIRepositoryService: RepositoryService {
                 let headMarker = columns[0].trimmingCharacters(in: .whitespacesAndNewlines)
                 let fullRefName = columns[1].trimmingCharacters(in: .whitespacesAndNewlines)
                 let shortName = columns[2].trimmingCharacters(in: .whitespacesAndNewlines)
-                guard shortName.isEmpty == false, shortName.hasSuffix("/HEAD") == false else {
+                guard shortName.isEmpty == false,
+                      shortName.hasSuffix("/HEAD") == false,
+                      fullRefName.hasSuffix("/HEAD") == false else {
                     return nil
                 }
 

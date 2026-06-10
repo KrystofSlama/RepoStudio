@@ -15,6 +15,7 @@ protocol RepositoryService {
     func commit(files: [ChangedFile], summary: String, description: String, at url: URL) async throws
     func createBranch(named branchName: String, at url: URL) async throws
     func checkoutBranch(named branchName: String, at url: URL) async throws
+    func refreshRemoteBranches(at url: URL) async throws
     func fetchBranches(at url: URL) async throws -> [GitBranch]
     func pullCurrentBranch(at url: URL) async throws
     func pushCurrentBranch(at url: URL) async throws

@@ -39,7 +39,7 @@ struct DashboardCommandActions {
             viewModel?.openRecentRepository(at: path)
         }
         refreshRepositoryState = { [weak viewModel] in
-            viewModel?.refreshRepositoryState()
+            viewModel?.refreshRepositoryState(refreshRemoteBranches: true)
         }
         performPrimarySyncAction = { [weak viewModel] in
             viewModel?.performPrimarySyncAction()
@@ -825,7 +825,7 @@ extension DashboardView {
                         .foregroundStyle(.secondary)
                     Spacer()
                     Button {
-                        viewModel.refreshRepositoryState()
+                        viewModel.refreshRepositoryState(refreshRemoteBranches: true)
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }

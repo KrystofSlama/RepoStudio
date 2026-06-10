@@ -499,12 +499,19 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func refreshRepositoryState() {
+        refreshRepositoryState(refreshRemoteBranches: false)
+    }
+
+    func refreshRepositoryState(refreshRemoteBranches shouldRefreshRemoteBranches: Bool) {
         guard let repoURL = repositoryContext?.repoURL else {
             return
         }
 
         Task {
-            await refreshRepositoryState(at: repoURL)
+            await refreshRepositoryState(
+                at: repoURL,
+                refreshRemoteBranches: shouldRefreshRemoteBranches
+            )
         }
     }
 
@@ -657,7 +664,7 @@ final class DashboardViewModel: ObservableObject {
             return
         }
 
-        refreshRepositoryState()
+        refreshRepositoryState(refreshRemoteBranches: true)
     }
 
     func showGitHubAccountSheet() {
@@ -866,7 +873,10 @@ final class DashboardViewModel: ObservableObject {
         shouldOfferGitHubTokenAction = false
     }
 
-    private func refreshRepositoryState(at repoURL: URL) async {
+    private func refreshRepositoryState(
+        at repoURL: URL,
+        refreshRemoteBranches shouldRefreshRemoteBranches: Bool = false
+    ) async {
         guard !isRefreshing else {
             return
         }
@@ -876,6 +886,10 @@ final class DashboardViewModel: ObservableObject {
 
         do {
             if isGitRepository {
+                if shouldRefreshRemoteBranches {
+                    try await repositoryService.refreshRemoteBranches(at: repoURL)
+                }
+
                 let context = try await repositoryService.fetchRepositoryContext(at: repoURL)
                 let files = try await repositoryService.fetchChangedFiles(at: repoURL)
                 let repositoryFiles = try await repositoryService.fetchRepositoryFiles(at: repoURL)
