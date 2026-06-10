@@ -70,6 +70,9 @@ struct DashboardView: View {
         .onChange(of: viewModel.repositoryContext?.repoURL.path) {
             sidebarSelection = nil
         }
+        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+            viewModel.reloadApplicationSettings()
+        }
         .sheet(isPresented: $viewModel.isNewBranchSheetPresented) {
             NewBranchSheet(viewModel: viewModel)
         }
