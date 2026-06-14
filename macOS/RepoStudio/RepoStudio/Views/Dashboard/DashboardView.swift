@@ -58,7 +58,7 @@ struct DashboardView: View {
         .toolbar {
             DashboardToolbar(viewModel: viewModel)
         }
-        //.navigationTitle(viewModel.windowTitle)
+        .navigationTitle("")
         .focusedSceneValue(
             \.dashboardCommandActions,
             DashboardCommandActions(viewModel: viewModel)
@@ -80,6 +80,20 @@ struct DashboardView: View {
         }
         .sheet(isPresented: $viewModel.isNewBranchSheetPresented) {
             NewBranchSheet(viewModel: viewModel)
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { viewModel.branchSwitchRequest != nil },
+                set: { value in
+                    if value == false {
+                        viewModel.cancelBranchSwitch()
+                    }
+                }
+            )
+        ) {
+            if let request = viewModel.branchSwitchRequest {
+                SwitchBranchSheet(viewModel: viewModel, request: request)
+            }
         }
         .sheet(isPresented: $viewModel.isGitHubAccountSheetPresented) {
             GitHubAccountSheet(viewModel: viewModel)

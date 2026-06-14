@@ -164,6 +164,42 @@ struct GitCLIRepositoryService: RepositoryService {
         )
     }
 
+    func stashChanges(message: String, at url: URL) async throws {
+        let trimmedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stashMessage = trimmedMessage.isEmpty ? "RepoStudio work in progress" : trimmedMessage
+
+        _ = try await runRepositoryCommand(
+            in: url,
+            command: ["stash", "push", "--include-untracked", "--message", stashMessage]
+        )
+    }
+
+    func restoreStashedChanges(for branchName: String, at url: URL) async throws -> Bool {
+        let trimmedBranchName = branchName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedBranchName.isEmpty == false else {
+            return false
+        }
+
+        let stashListOutput = try await runRepositoryCommand(
+            in: url,
+            command: ["stash", "list", "--format=%gd%x00%gs"]
+        )
+
+        guard let stashRef = repoStudioStashRef(for: trimmedBranchName, in: stashListOutput) else {
+            return false
+        }
+
+        _ = try await runRepositoryCommand(
+            in: url,
+            command: ["stash", "apply", stashRef]
+        )
+        _ = try await runRepositoryCommand(
+            in: url,
+            command: ["stash", "drop", stashRef]
+        )
+        return true
+    }
+
     func createBranch(named branchName: String, at url: URL) async throws {
         let trimmedBranchName = branchName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmedBranchName.isEmpty == false else {
@@ -507,6 +543,25 @@ struct GitCLIRepositoryService: RepositoryService {
         }
 
         return paths
+    }
+
+    private func repoStudioStashRef(for branchName: String, in output: String) -> String? {
+        let expectedSubjectPrefix = "On \(branchName): RepoStudio: WIP on \(branchName) before switching to "
+
+        for line in output.split(separator: "\n", omittingEmptySubsequences: true) {
+            let columns = line.split(separator: "\0", maxSplits: 1, omittingEmptySubsequences: false)
+            guard columns.count == 2 else {
+                continue
+            }
+
+            let stashRef = String(columns[0]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let subject = String(columns[1])
+            if stashRef.isEmpty == false, subject.hasPrefix(expectedSubjectPrefix) {
+                return stashRef
+            }
+        }
+
+        return nil
     }
 
     private func parseBranches(_ output: String) -> [GitBranch] {

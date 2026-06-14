@@ -179,6 +179,78 @@ struct RepoStudioTests {
         ])
     }
 
+    @Test func stashChangesUsesGitStashWithUntrackedFiles() async throws {
+        let repoURL = URL(fileURLWithPath: "/tmp/repostudio-test")
+        let recorder = GitCommandRecorder()
+        let service = GitCLIRepositoryService(commandRunner: { arguments in
+            try await recorder.run(arguments)
+        })
+
+        try await service.stashChanges(
+            message: "RepoStudio: WIP on main before switching to feature/ui",
+            at: repoURL
+        )
+
+        let commands = await recorder.recordedCommands()
+        #expect(commands == [
+            [
+                "-C",
+                repoURL.path,
+                "stash",
+                "push",
+                "--include-untracked",
+                "--message",
+                "RepoStudio: WIP on main before switching to feature/ui"
+            ]
+        ])
+    }
+
+    @Test func restoreStashedChangesAppliesAndDropsMatchingRepoStudioStash() async throws {
+        let repoURL = URL(fileURLWithPath: "/tmp/repostudio-test")
+        let recorder = GitCommandRecorder(responses: [
+            "stash list --format=%gd%x00%gs": """
+            stash@{0}\u{0}On other: RepoStudio: WIP on other before switching to main
+            stash@{1}\u{0}On main: RepoStudio: WIP on main before switching to feature/ui
+
+            """
+        ])
+        let service = GitCLIRepositoryService(commandRunner: { arguments in
+            try await recorder.run(arguments)
+        })
+
+        let didRestore = try await service.restoreStashedChanges(for: "main", at: repoURL)
+
+        let commands = await recorder.recordedCommands()
+        #expect(didRestore)
+        #expect(commands == [
+            ["-C", repoURL.path, "stash", "list", "--format=%gd%x00%gs"],
+            ["-C", repoURL.path, "stash", "apply", "stash@{1}"],
+            ["-C", repoURL.path, "stash", "drop", "stash@{1}"]
+        ])
+    }
+
+    @Test func restoreStashedChangesIgnoresUnrelatedStashes() async throws {
+        let repoURL = URL(fileURLWithPath: "/tmp/repostudio-test")
+        let recorder = GitCommandRecorder(responses: [
+            "stash list --format=%gd%x00%gs": """
+            stash@{0}\u{0}On main: manual stash
+            stash@{1}\u{0}On other: RepoStudio: WIP on other before switching to main
+
+            """
+        ])
+        let service = GitCLIRepositoryService(commandRunner: { arguments in
+            try await recorder.run(arguments)
+        })
+
+        let didRestore = try await service.restoreStashedChanges(for: "main", at: repoURL)
+
+        let commands = await recorder.recordedCommands()
+        #expect(didRestore == false)
+        #expect(commands == [
+            ["-C", repoURL.path, "stash", "list", "--format=%gd%x00%gs"]
+        ])
+    }
+
     @Test func gitStatusParsingSeparatesStageStatesAndConflicts() throws {
         let files = try GitStatusParser().parse("""
          M README.md
@@ -610,6 +682,147 @@ struct RepoStudioTests {
     }
 
     @MainActor
+    @Test func dashboardBranchSwitchWithChangesPromptsBeforeCheckout() async throws {
+        let service = FakeRepositoryService()
+        let featureBranch = GitBranch(name: "feature/ui", isCurrent: false, isRemote: false)
+        service.branches = [
+            GitBranch(name: "main", isCurrent: true, isRemote: false),
+            featureBranch
+        ]
+        let viewModel = DashboardViewModel(repositoryService: service)
+
+        viewModel.openRepository(at: service.repoURL)
+        await waitForDashboardTasks()
+        viewModel.checkoutBranch(featureBranch)
+
+        #expect(viewModel.branchSwitchRequest?.targetBranchName == "feature/ui")
+        #expect(viewModel.branchSwitchRequest?.currentBranchName == "main")
+        #expect(service.checkedOutBranches.isEmpty)
+    }
+
+    @MainActor
+    @Test func dashboardBranchSwitchCanLeaveChangesByStashingBeforeCheckout() async throws {
+        let service = FakeRepositoryService()
+        let featureBranch = GitBranch(name: "feature/ui", isCurrent: false, isRemote: false)
+        service.branches = [
+            GitBranch(name: "main", isCurrent: true, isRemote: false),
+            featureBranch
+        ]
+        let viewModel = DashboardViewModel(repositoryService: service)
+
+        viewModel.openRepository(at: service.repoURL)
+        await waitForDashboardTasks()
+        viewModel.checkoutBranch(featureBranch)
+        viewModel.confirmBranchSwitchLeavingChanges()
+        await waitForDashboardTasks()
+
+        #expect(service.stashedMessages == [
+            "RepoStudio: WIP on main before switching to feature/ui"
+        ])
+        #expect(service.checkedOutBranches == ["feature/ui"])
+        #expect(viewModel.branchSwitchRequest == nil)
+    }
+
+    @MainActor
+    @Test func dashboardBranchSwitchRestoresSavedChangesWhenReturningToBranch() async throws {
+        let service = FakeRepositoryService()
+        service.changedFiles = []
+        service.branchesWithRestorableStash = ["main"]
+        let mainBranch = GitBranch(name: "main", isCurrent: false, isRemote: false)
+        service.branches = [
+            mainBranch,
+            GitBranch(name: "feature/ui", isCurrent: true, isRemote: false)
+        ]
+        let viewModel = DashboardViewModel(repositoryService: service)
+
+        viewModel.openRepository(at: service.repoURL)
+        await waitForDashboardTasks()
+        viewModel.checkoutBranch(mainBranch)
+        await waitForDashboardTasks()
+
+        #expect(service.checkedOutBranches == ["main"])
+        #expect(service.restoredStashBranches == ["main"])
+        #expect(viewModel.changedFiles.first?.path == "Restored.md")
+    }
+
+    @MainActor
+    @Test func dashboardLeaveChangesSwitchRestoresTargetBranchSavedChanges() async throws {
+        let service = FakeRepositoryService()
+        service.branchesWithRestorableStash = ["feature/ui"]
+        let featureBranch = GitBranch(name: "feature/ui", isCurrent: false, isRemote: false)
+        service.branches = [
+            GitBranch(name: "main", isCurrent: true, isRemote: false),
+            featureBranch
+        ]
+        let viewModel = DashboardViewModel(repositoryService: service)
+
+        viewModel.openRepository(at: service.repoURL)
+        await waitForDashboardTasks()
+        viewModel.checkoutBranch(featureBranch)
+        viewModel.confirmBranchSwitchLeavingChanges()
+        await waitForDashboardTasks()
+
+        #expect(service.stashedMessages == [
+            "RepoStudio: WIP on main before switching to feature/ui"
+        ])
+        #expect(service.checkedOutBranches == ["feature/ui"])
+        #expect(service.restoredStashBranches == ["feature/ui"])
+        #expect(viewModel.changedFiles.first?.path == "Restored.md")
+    }
+
+    @MainActor
+    @Test func dashboardBranchSwitchCanBringChangesWithoutStashing() async throws {
+        let service = FakeRepositoryService()
+        service.branchesWithRestorableStash = ["feature/ui"]
+        let featureBranch = GitBranch(name: "feature/ui", isCurrent: false, isRemote: false)
+        service.branches = [
+            GitBranch(name: "main", isCurrent: true, isRemote: false),
+            featureBranch
+        ]
+        let viewModel = DashboardViewModel(repositoryService: service)
+
+        viewModel.openRepository(at: service.repoURL)
+        await waitForDashboardTasks()
+        viewModel.checkoutBranch(featureBranch)
+        viewModel.confirmBranchSwitchBringingChanges()
+        await waitForDashboardTasks()
+
+        #expect(service.stashedMessages.isEmpty)
+        #expect(service.checkedOutBranches == ["feature/ui"])
+        #expect(service.restoredStashBranches.isEmpty)
+        #expect(viewModel.branchSwitchRequest == nil)
+    }
+
+    @MainActor
+    @Test func dashboardBranchSwitchBlocksConflictedFiles() async throws {
+        let service = FakeRepositoryService()
+        let featureBranch = GitBranch(name: "feature/ui", isCurrent: false, isRemote: false)
+        service.changedFiles = [
+            ChangedFile(
+                path: "Conflict.md",
+                oldPath: nil,
+                changeType: .conflicted,
+                stageState: .conflicted,
+                isMarkdown: true,
+                isBinary: false
+            )
+        ]
+        service.branches = [
+            GitBranch(name: "main", isCurrent: true, isRemote: false),
+            featureBranch
+        ]
+        let viewModel = DashboardViewModel(repositoryService: service)
+
+        viewModel.openRepository(at: service.repoURL)
+        await waitForDashboardTasks()
+        viewModel.checkoutBranch(featureBranch)
+
+        #expect(viewModel.branchSwitchRequest == nil)
+        #expect(viewModel.errorMessage == "Resolve conflicted files before switching branches.")
+        #expect(service.checkedOutBranches.isEmpty)
+    }
+
+    @MainActor
     @Test func dashboardConflictsDisableCommitAndSync() async throws {
         let service = FakeRepositoryService()
         service.changedFiles = [
@@ -708,6 +921,10 @@ final class FakeRepositoryService: RepositoryService {
     var committedSummaries: [String] = []
     var stagedPaths: [[String]] = []
     var unstagedPaths: [[String]] = []
+    var stashedMessages: [String] = []
+    var branchesWithRestorableStash: Set<String> = []
+    var restoredStashBranches: [String] = []
+    var checkedOutBranches: [String] = []
     var checkedOutRemoteBranches: [GitBranch] = []
     var deletedBranches: [GitBranch] = []
     var commitError: Error?
@@ -715,7 +932,8 @@ final class FakeRepositoryService: RepositoryService {
     func validateRepository(at url: URL) async throws {}
 
     func fetchRepositoryContext(at url: URL) async throws -> RepositoryContext {
-        RepositoryContext(repoURL: repoURL, repoName: "repostudio-fake", branchName: "main")
+        let branchName = branches.first { $0.isCurrent && $0.isRemote == false }?.name ?? "main"
+        return RepositoryContext(repoURL: repoURL, repoName: "repostudio-fake", branchName: branchName)
     }
 
     func fetchChangedFiles(at url: URL) async throws -> [ChangedFile] {
@@ -782,9 +1000,43 @@ final class FakeRepositoryService: RepositoryService {
         }
     }
 
+    func stashChanges(message: String, at url: URL) async throws {
+        stashedMessages.append(message)
+        changedFiles = []
+    }
+
+    func restoreStashedChanges(for branchName: String, at url: URL) async throws -> Bool {
+        restoredStashBranches.append(branchName)
+        guard branchesWithRestorableStash.contains(branchName) else {
+            return false
+        }
+
+        changedFiles = [
+            ChangedFile(
+                path: "Restored.md",
+                oldPath: nil,
+                changeType: .modified,
+                stageState: .staged,
+                isMarkdown: true,
+                isBinary: false
+            )
+        ]
+        branchesWithRestorableStash.remove(branchName)
+        return true
+    }
+
     func createBranch(named branchName: String, at url: URL) async throws {}
 
-    func checkoutBranch(named branchName: String, at url: URL) async throws {}
+    func checkoutBranch(named branchName: String, at url: URL) async throws {
+        checkedOutBranches.append(branchName)
+        branches = branches.map { branch in
+            GitBranch(
+                name: branch.name,
+                isCurrent: branch.isRemote == false && branch.name == branchName,
+                isRemote: branch.isRemote
+            )
+        }
+    }
 
     func checkoutRemoteBranch(_ branch: GitBranch, at url: URL) async throws {
         checkedOutRemoteBranches.append(branch)

@@ -82,7 +82,7 @@ struct DashboardToolbar: ToolbarContent {
     @ObservedObject var viewModel: DashboardViewModel
 
     var body: some ToolbarContent {
-        ToolbarItem(placement: .principal) {
+        ToolbarItem(placement: .navigation) {
             RepositoryToolbarTitle(viewModel: viewModel)
         }
 
@@ -91,7 +91,10 @@ struct DashboardToolbar: ToolbarContent {
                 Button {
                     viewModel.performPrimarySyncAction()
                 } label: {
-                    Label(viewModel.primarySyncActionTitle, systemImage: viewModel.primarySyncActionSymbolName)
+                    HStack(spacing: 6) {
+                        Image(systemName: viewModel.primarySyncActionSymbolName)
+                        Text(viewModel.primarySyncActionTitle)
+                    }
                 }
                 .disabled(viewModel.canPerformPrimarySyncAction == false)
                 .help(viewModel.primarySyncActionTitle)
@@ -151,6 +154,7 @@ struct RepositoryToolbarTitle: View {
                 }
             }
             .contentShape(Rectangle())
+            .padding(.horizontal)
         }
         .buttonStyle(.plain)
         .disabled(viewModel.isGitRepository == false)
@@ -480,6 +484,105 @@ struct NewBranchSheet: View {
         }
         .padding(18)
         .frame(width: 360)
+    }
+}
+
+struct SwitchBranchSheet: View {
+    @ObservedObject var viewModel: DashboardViewModel
+    let request: DashboardViewModel.BranchSwitchRequest
+
+    private var changeCountText: String {
+        request.changedFileCount == 1 ? "1 changed file" : "\(request.changedFileCount) changed files"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Text("Switch Branch")
+                    .font(.headline)
+
+                Spacer()
+
+                Button {
+                    viewModel.cancelBranchSwitch()
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .keyboardShortcut(.cancelAction)
+            }
+
+            Text("You have \(changeCountText) on \(request.currentBranchName). What should RepoStudio do before switching to \(request.targetBranchName)?")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(spacing: 0) {
+                branchSwitchOption(
+                    title: "Leave changes on \(request.currentBranchName)",
+                    subtitle: "Your work will be saved in Git stash before switching branches.",
+                    symbolName: "tray.and.arrow.down",
+                    action: viewModel.confirmBranchSwitchLeavingChanges
+                )
+
+                Divider()
+
+                branchSwitchOption(
+                    title: "Bring changes to \(request.targetBranchName)",
+                    subtitle: "RepoStudio will try to switch branches with your current work.",
+                    symbolName: "arrow.triangle.branch",
+                    action: viewModel.confirmBranchSwitchBringingChanges
+                )
+            }
+            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(.separator.opacity(0.7))
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    viewModel.cancelBranchSwitch()
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 470)
+    }
+
+    private func branchSwitchOption(
+        title: String,
+        subtitle: String,
+        symbolName: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: symbolName)
+                    .font(.system(size: 18, weight: .semibold))
+                    .frame(width: 24)
+                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer()
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+        }
+        .buttonStyle(.plain)
     }
 }
 

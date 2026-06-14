@@ -46,6 +46,20 @@ final class DashboardViewModel: ObservableObject {
         var id: String { key }
     }
 
+    struct BranchSwitchRequest: Identifiable, Equatable {
+        let branch: GitBranch
+        let currentBranchName: String
+        let changedFileCount: Int
+
+        var id: String { branch.id }
+        var targetBranchName: String { branch.name }
+    }
+
+    private enum BranchSwitchChangeHandling {
+        case leaveChangesOnCurrentBranch
+        case bringChangesToTargetBranch
+    }
+
     //MARK: -Published State
     @Published private(set) var repositoryContext: RepositoryContext?
     @Published private(set) var changedFiles: [ChangedFile] = []
@@ -80,6 +94,7 @@ final class DashboardViewModel: ObservableObject {
     @Published var isNewBranchSheetPresented = false
     @Published var newBranchName = ""
     @Published var branchDeletionCandidate: GitBranch?
+    @Published private(set) var branchSwitchRequest: BranchSwitchRequest?
     @Published var isGitHubAccountSheetPresented = false
     @Published var gitHubAccountUsername = ""
     @Published var gitHubAccountToken = ""
@@ -739,12 +754,7 @@ final class DashboardViewModel: ObservableObject {
             return
         }
 
-        if branch.isRemote {
-            checkoutRemoteBranch(branch)
-            return
-        }
-
-        checkoutBranch(named: branch.name)
+        requestBranchSwitch(to: branch)
     }
 
     func checkoutBranch(named branchName: String) {
@@ -753,11 +763,13 @@ final class DashboardViewModel: ObservableObject {
             return
         }
 
-        runGitOperation(label: "Switching branch...") { [repositoryService] repoURL in
-            try await repositoryService.checkoutBranch(named: trimmedBranchName, at: repoURL)
-        } onSuccess: { [weak self] in
-            self?.userUnstagedPaths.removeAll()
-        }
+        requestBranchSwitch(
+            to: GitBranch(
+                name: trimmedBranchName,
+                isCurrent: repositoryContext?.branchName == trimmedBranchName,
+                isRemote: false
+            )
+        )
     }
 
     func checkoutRemoteBranch(_ branch: GitBranch) {
@@ -765,11 +777,37 @@ final class DashboardViewModel: ObservableObject {
             return
         }
 
-        runGitOperation(label: "Tracking branch...") { [repositoryService] repoURL in
-            try await repositoryService.checkoutRemoteBranch(branch, at: repoURL)
-        } onSuccess: { [weak self] in
-            self?.userUnstagedPaths.removeAll()
+        requestBranchSwitch(to: branch)
+    }
+
+    func cancelBranchSwitch() {
+        branchSwitchRequest = nil
+    }
+
+    func confirmBranchSwitchLeavingChanges() {
+        guard let request = branchSwitchRequest else {
+            return
         }
+
+        branchSwitchRequest = nil
+        performBranchSwitch(
+            to: request.branch,
+            handling: .leaveChangesOnCurrentBranch,
+            currentBranchName: request.currentBranchName
+        )
+    }
+
+    func confirmBranchSwitchBringingChanges() {
+        guard let request = branchSwitchRequest else {
+            return
+        }
+
+        branchSwitchRequest = nil
+        performBranchSwitch(
+            to: request.branch,
+            handling: .bringChangesToTargetBranch,
+            currentBranchName: request.currentBranchName
+        )
     }
 
     func requestDeleteBranch(_ branch: GitBranch) {
@@ -1152,6 +1190,83 @@ final class DashboardViewModel: ObservableObject {
                 self.apply(error: error)
             }
         }
+    }
+
+    private func requestBranchSwitch(to branch: GitBranch) {
+        guard branch.isCurrent == false else {
+            return
+        }
+
+        if hasConflictedFiles {
+            errorMessage = "Resolve conflicted files before switching branches."
+            return
+        }
+
+        let currentBranchName = repositoryContext?.branchName ?? "the current branch"
+        guard changedFiles.isEmpty == false else {
+            performBranchSwitch(
+                to: branch,
+                handling: .bringChangesToTargetBranch,
+                currentBranchName: currentBranchName
+            )
+            return
+        }
+
+        branchSwitchRequest = BranchSwitchRequest(
+            branch: branch,
+            currentBranchName: currentBranchName,
+            changedFileCount: changedFiles.count
+        )
+    }
+
+    private func performBranchSwitch(
+        to branch: GitBranch,
+        handling: BranchSwitchChangeHandling,
+        currentBranchName: String
+    ) {
+        let shouldRestoreTargetStash = handling == .leaveChangesOnCurrentBranch || changedFiles.isEmpty
+        let targetBranchName = localBranchName(for: branch)
+        let operationLabel: String
+        switch handling {
+        case .leaveChangesOnCurrentBranch:
+            operationLabel = "Stashing and switching..."
+        case .bringChangesToTargetBranch:
+            operationLabel = branch.isRemote ? "Tracking branch..." : "Switching branch..."
+        }
+
+        runGitOperation(label: operationLabel) { [repositoryService] repoURL in
+            if handling == .leaveChangesOnCurrentBranch {
+                try await repositoryService.stashChanges(
+                    message: "RepoStudio: WIP on \(currentBranchName) before switching to \(branch.name)",
+                    at: repoURL
+                )
+            }
+
+            if branch.isRemote {
+                try await repositoryService.checkoutRemoteBranch(branch, at: repoURL)
+            } else {
+                try await repositoryService.checkoutBranch(named: branch.name, at: repoURL)
+            }
+
+            if shouldRestoreTargetStash {
+                _ = try await repositoryService.restoreStashedChanges(for: targetBranchName, at: repoURL)
+            }
+        } onSuccess: { [weak self] in
+            self?.userUnstagedPaths.removeAll()
+        }
+    }
+
+    private func localBranchName(for branch: GitBranch) -> String {
+        guard branch.isRemote else {
+            return branch.name
+        }
+
+        let components = branch.name.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true)
+        guard components.count == 2 else {
+            return branch.name
+        }
+
+        return String(components[1])
     }
 
     private func autoStageCandidates(from files: [ChangedFile]) -> [ChangedFile] {
@@ -1574,6 +1689,13 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func userFacingMessage(for error: DashboardError) -> String {
+        if isBranchCheckoutOverwriteError(error) {
+            return """
+            Git cannot bring these changes to the selected branch because some files would be overwritten.
+            Choose Leave Changes when switching, or commit your changes first.
+            """
+        }
+
         guard isGitHubAuthenticationError(error) else {
             return error.localizedDescription
         }
@@ -1585,6 +1707,16 @@ final class DashboardViewModel: ObservableObject {
 
         Details: \(error.localizedDescription)
         """
+    }
+
+    private func isBranchCheckoutOverwriteError(_ error: DashboardError) -> Bool {
+        guard case let .gitCommandFailed(_, message) = error else {
+            return false
+        }
+
+        let lowered = message.lowercased()
+        return lowered.contains("would be overwritten by checkout")
+            || lowered.contains("would be overwritten by switch")
     }
 
     private func isGitHubAuthenticationError(_ error: DashboardError) -> Bool {
