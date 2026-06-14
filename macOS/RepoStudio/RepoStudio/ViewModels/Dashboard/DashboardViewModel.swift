@@ -56,13 +56,17 @@ final class DashboardViewModel: ObservableObject {
     @Published private(set) var isOpeningRepository = false
     @Published private(set) var isRefreshing = false
     @Published private(set) var recentRepositoryPaths: [String] = []
-    @Published private(set) var selectedCommitFileIDs: Set<String> = []
     @Published private(set) var branches: [GitBranch] = []
     @Published private(set) var remoteTrackingState = GitRemoteTrackingState.unpublished
     @Published private(set) var gitHubAccountState = GitHubAccountState.unavailable
     @Published private(set) var recentGitHubUsernames: [String] = []
     @Published private(set) var activeGitOperationLabel: String?
     @Published private(set) var isGitOperationInProgress = false
+    @Published private(set) var commitHistory: [GitCommitSummary] = []
+    @Published private(set) var selectedCommitDetails: GitCommitDetails?
+    @Published private(set) var selectedCommitHash: String?
+    @Published private(set) var isCommitDetailsLoading = false
+    @Published private(set) var isHistoryViewPresented = false
 
     @Published var selectedFilePath: String?
     @Published var selectedFileTypeFilters: Set<String> = []
@@ -75,6 +79,7 @@ final class DashboardViewModel: ObservableObject {
     @Published var commitDescription = ""
     @Published var isNewBranchSheetPresented = false
     @Published var newBranchName = ""
+    @Published var branchDeletionCandidate: GitBranch?
     @Published var isGitHubAccountSheetPresented = false
     @Published var gitHubAccountUsername = ""
     @Published var gitHubAccountToken = ""
@@ -98,15 +103,15 @@ final class DashboardViewModel: ObservableObject {
     private var isLoadingEditorTextFromDisk = false
     private var dirtyEditorFilePath: String?
     private var securityScopedRepositoryURL: URL?
-    private var lastChangedFileIDs: Set<String> = []
+    private var userUnstagedPaths: Set<String> = []
 
     private let recentRepositoriesKey = "repoDraft.recentRepositories"
     private let recentGitHubUsernamesKey = AppPreferenceKeys.recentGitHubUsernames
     private let repositoryBookmarksKey = "repoDraft.repositoryBookmarks"
     private let noGitRepositoryLabel = "No git repository"
 
-    var groupedChangedFiles: [(GitChangeType, [ChangedFile])] {
-        let grouped = Dictionary(grouping: filteredChangedFiles, by: { $0.changeType })
+    var groupedChangedFiles: [(GitFileStageState, [ChangedFile])] {
+        let grouped = Dictionary(grouping: filteredChangedFiles, by: { $0.stageState })
         return grouped
             .map { ($0.key, $0.value.sorted { $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending }) }
             .sorted { lhs, rhs in
@@ -177,6 +182,10 @@ final class DashboardViewModel: ObservableObject {
         }
 
         return "Unchanged"
+    }
+
+    var selectedStageText: String {
+        selectedFile?.stageState.displayName ?? "Clean"
     }
 
     var selectedTypeText: String {
@@ -291,23 +300,37 @@ final class DashboardViewModel: ObservableObject {
     }
 
     var selectedCommitFiles: [ChangedFile] {
-        changedFiles.filter { selectedCommitFileIDs.contains($0.id) }
+        changedFiles.filter { $0.stageState.hasStagedChanges }
     }
 
     var selectedCommitFileCount: Int {
         selectedCommitFiles.count
     }
 
+    var hasConflictedFiles: Bool {
+        changedFiles.contains { $0.stageState == .conflicted }
+    }
+
+    var conflictWarningText: String? {
+        guard hasConflictedFiles else {
+            return nil
+        }
+
+        let count = changedFiles.filter { $0.stageState == .conflicted }.count
+        return "\(count) conflicted file(s). Resolve conflicts before committing, pulling, or pushing."
+    }
+
     var canCommitSelectedFiles: Bool {
         isGitRepository
             && isGitOperationInProgress == false
             && selectedCommitFileCount > 0
+            && hasConflictedFiles == false
             && commitSummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 
     var commitButtonTitle: String {
         let branchName = repositoryContext?.branchName ?? "branch"
-        return "Commit \(selectedCommitFileCount) file(s) to \(branchName)"
+        return "Commit \(selectedCommitFileCount) staged file(s) to \(branchName)"
     }
 
     var syncStatusText: String {
@@ -375,7 +398,10 @@ final class DashboardViewModel: ObservableObject {
     }
 
     var canPerformPrimarySyncAction: Bool {
-        isGitRepository && isGitOperationInProgress == false && repositoryContext != nil
+        isGitRepository
+            && isGitOperationInProgress == false
+            && repositoryContext != nil
+            && hasConflictedFiles == false
     }
 
     private var defaultPublishRemoteName: String {
@@ -526,6 +552,9 @@ final class DashboardViewModel: ObservableObject {
 
     func selectFile(_ file: ChangedFile?) {
         persistEditorTextIfNeeded()
+        isHistoryViewPresented = false
+        selectedCommitHash = nil
+        selectedCommitDetails = nil
         selectedFile = file
         selectedFilePath = file?.path
         loadSelectedFileArtifacts()
@@ -533,9 +562,49 @@ final class DashboardViewModel: ObservableObject {
 
     func selectFile(path: String?) {
         persistEditorTextIfNeeded()
+        isHistoryViewPresented = false
+        selectedCommitHash = nil
+        selectedCommitDetails = nil
         selectedFilePath = path
         selectedFile = changedFiles.first(where: { $0.path == path })
         loadSelectedFileArtifacts()
+    }
+
+    func selectCommit(_ commit: GitCommitSummary) {
+        persistEditorTextIfNeeded()
+        isHistoryViewPresented = true
+        selectedFilePath = nil
+        selectedFile = nil
+        editorText = ""
+        readOnlyPreviewText = ""
+        clearSelectedDiffState()
+        selectedCommitHash = commit.hash
+        loadCommitDetails(commitHash: commit.hash)
+    }
+
+    func showHistoryView() {
+        persistEditorTextIfNeeded()
+        isHistoryViewPresented = true
+        selectedFilePath = nil
+        selectedFile = nil
+        editorText = ""
+        readOnlyPreviewText = ""
+        clearSelectedDiffState()
+
+        if let selectedCommitHash,
+           commitHistory.contains(where: { $0.hash == selectedCommitHash }) {
+            loadCommitDetails(commitHash: selectedCommitHash)
+            return
+        }
+
+        if let firstCommit = commitHistory.first {
+            selectedCommitHash = firstCommit.hash
+            loadCommitDetails(commitHash: firstCommit.hash)
+        } else {
+            selectedCommitHash = nil
+            selectedCommitDetails = nil
+            isCommitDetailsLoading = false
+        }
     }
 
     func setCanvasMode(_ mode: CanvasMode) {
@@ -562,20 +631,47 @@ final class DashboardViewModel: ObservableObject {
         changedFiles.first(where: { $0.path == path })?.changeType
     }
 
-    func isCommitFileSelected(_ file: ChangedFile) -> Bool {
-        selectedCommitFileIDs.contains(file.id)
+    func stageFile(_ file: ChangedFile) {
+        stageFiles([file])
     }
 
-    func toggleCommitFileSelection(_ file: ChangedFile) {
-        if selectedCommitFileIDs.contains(file.id) {
-            selectedCommitFileIDs.remove(file.id)
-        } else {
-            selectedCommitFileIDs.insert(file.id)
+    func unstageFile(_ file: ChangedFile) {
+        unstageFiles([file])
+    }
+
+    func stageFiles(_ files: [ChangedFile]) {
+        let stageableFiles = files.filter { $0.canStage && $0.stageState != .conflicted }
+        guard stageableFiles.isEmpty == false else {
+            return
+        }
+
+        runGitOperation(label: "Staging...") { [repositoryService] repoURL in
+            try await repositoryService.stageFiles(stageableFiles, at: repoURL)
+        } onSuccess: { [weak self] in
+            self?.removeUserUnstagedPaths(for: stageableFiles)
+        }
+    }
+
+    func unstageFiles(_ files: [ChangedFile]) {
+        let unstageableFiles = files.filter { $0.canUnstage && $0.stageState != .conflicted }
+        guard unstageableFiles.isEmpty == false else {
+            return
+        }
+
+        runGitOperation(label: "Unstaging...") { [repositoryService] repoURL in
+            try await repositoryService.unstageFiles(unstageableFiles, at: repoURL)
+        } onSuccess: { [weak self] in
+            self?.addUserUnstagedPaths(for: unstageableFiles)
+            // Keep the paths excluded from auto-stage until the user stages them,
+            // commits, switches branch/repo, or the files disappear from status.
         }
     }
 
     func commitSelectedFiles() {
         guard canCommitSelectedFiles else {
+            if hasConflictedFiles {
+                errorMessage = conflictWarningText
+            }
             return
         }
 
@@ -593,6 +689,7 @@ final class DashboardViewModel: ObservableObject {
         } onSuccess: { [weak self] in
             self?.commitSummary = ""
             self?.commitDescription = ""
+            self?.userUnstagedPaths.removeAll()
         }
     }
 
@@ -625,11 +722,18 @@ final class DashboardViewModel: ObservableObject {
 
         runGitOperation(label: "Creating branch...") { [repositoryService] repoURL in
             try await repositoryService.createBranch(named: trimmedBranchName, at: repoURL)
+        } onSuccess: { [weak self] in
+            self?.userUnstagedPaths.removeAll()
         }
     }
 
     func checkoutBranch(_ branch: GitBranch) {
-        guard branch.isRemote == false, branch.isCurrent == false else {
+        guard branch.isCurrent == false else {
+            return
+        }
+
+        if branch.isRemote {
+            checkoutRemoteBranch(branch)
             return
         }
 
@@ -644,11 +748,51 @@ final class DashboardViewModel: ObservableObject {
 
         runGitOperation(label: "Switching branch...") { [repositoryService] repoURL in
             try await repositoryService.checkoutBranch(named: trimmedBranchName, at: repoURL)
+        } onSuccess: { [weak self] in
+            self?.userUnstagedPaths.removeAll()
+        }
+    }
+
+    func checkoutRemoteBranch(_ branch: GitBranch) {
+        guard branch.isRemote, branch.name.isEmpty == false else {
+            return
+        }
+
+        runGitOperation(label: "Tracking branch...") { [repositoryService] repoURL in
+            try await repositoryService.checkoutRemoteBranch(branch, at: repoURL)
+        } onSuccess: { [weak self] in
+            self?.userUnstagedPaths.removeAll()
+        }
+    }
+
+    func requestDeleteBranch(_ branch: GitBranch) {
+        guard branch.isRemote == false, branch.isCurrent == false else {
+            return
+        }
+
+        branchDeletionCandidate = branch
+    }
+
+    func cancelDeleteBranch() {
+        branchDeletionCandidate = nil
+    }
+
+    func confirmDeleteBranch() {
+        guard let branch = branchDeletionCandidate else {
+            return
+        }
+
+        branchDeletionCandidate = nil
+        runGitOperation(label: "Deleting branch...") { [repositoryService] repoURL in
+            try await repositoryService.deleteBranch(branch, at: repoURL)
         }
     }
 
     func performPrimarySyncAction() {
         guard canPerformPrimarySyncAction else {
+            if hasConflictedFiles {
+                errorMessage = conflictWarningText
+            }
             return
         }
 
@@ -852,9 +996,14 @@ final class DashboardViewModel: ObservableObject {
             changedFiles = []
             repositoryFiles = files
             branches = []
+            commitHistory = []
+            selectedCommitHash = nil
+            selectedCommitDetails = nil
+            isCommitDetailsLoading = false
+            isHistoryViewPresented = false
+            userUnstagedPaths.removeAll()
             remoteTrackingState = .unpublished
             gitHubAccountState = .unavailable
-            reconcileCommitSelection()
             addRecentRepository(url.path)
             saveBookmarkIfPossible(for: url)
 
@@ -879,9 +1028,14 @@ final class DashboardViewModel: ObservableObject {
         changedFiles = []
         repositoryFiles = []
         branches = []
+        commitHistory = []
+        selectedCommitHash = nil
+        selectedCommitDetails = nil
+        isCommitDetailsLoading = false
+        isHistoryViewPresented = false
+        userUnstagedPaths.removeAll()
         remoteTrackingState = .unpublished
         gitHubAccountState = .unavailable
-        reconcileCommitSelection()
         errorMessage = nil
         shouldOfferInstallToolsAction = false
         shouldOfferGitHubTokenAction = false
@@ -905,11 +1059,19 @@ final class DashboardViewModel: ObservableObject {
                 }
 
                 let context = try await repositoryService.fetchRepositoryContext(at: repoURL)
-                let files = try await repositoryService.fetchChangedFiles(at: repoURL)
+                var files = try await repositoryService.fetchChangedFiles(at: repoURL)
+                pruneUserUnstagedPaths(for: files)
+                let filesToAutoStage = autoStageCandidates(from: files)
+                if filesToAutoStage.isEmpty == false {
+                    try await repositoryService.stageFiles(filesToAutoStage, at: repoURL)
+                    files = try await repositoryService.fetchChangedFiles(at: repoURL)
+                    pruneUserUnstagedPaths(for: files)
+                }
                 let repositoryFiles = try await repositoryService.fetchRepositoryFiles(at: repoURL)
                 let branches = try await repositoryService.fetchBranches(at: repoURL)
                 let remoteTrackingState = try await repositoryService.fetchRemoteTrackingState(at: repoURL)
                 let gitHubAccountState = try await repositoryService.fetchGitHubAccountState(at: repoURL)
+                let commitHistory = try await repositoryService.fetchCommitHistory(at: repoURL)
 
                 self.repositoryContext = context
                 self.changedFiles = files
@@ -917,7 +1079,8 @@ final class DashboardViewModel: ObservableObject {
                 self.branches = branches
                 self.remoteTrackingState = remoteTrackingState
                 self.gitHubAccountState = gitHubAccountState
-                reconcileCommitSelection()
+                self.commitHistory = commitHistory
+                reconcileSelectedCommit(with: commitHistory)
             } else {
                 let files = try fetchFolderFiles(at: repoURL)
                 self.repositoryContext = RepositoryContext(
@@ -928,9 +1091,14 @@ final class DashboardViewModel: ObservableObject {
                 self.changedFiles = []
                 self.repositoryFiles = files
                 self.branches = []
+                self.commitHistory = []
+                self.selectedCommitHash = nil
+                self.selectedCommitDetails = nil
+                self.isCommitDetailsLoading = false
+                self.isHistoryViewPresented = false
+                self.userUnstagedPaths.removeAll()
                 self.remoteTrackingState = .unpublished
                 self.gitHubAccountState = .unavailable
-                reconcileCommitSelection()
             }
 
             reconcileSelectedFile()
@@ -979,18 +1147,86 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    private func reconcileCommitSelection() {
-        let currentFileIDs = Set(changedFiles.map(\.id))
-        let newFileIDs = currentFileIDs.subtracting(lastChangedFileIDs)
+    private func autoStageCandidates(from files: [ChangedFile]) -> [ChangedFile] {
+        files.filter { file in
+            file.stageState != .conflicted
+                && file.canStage
+                && file.statusPaths.contains(where: { userUnstagedPaths.contains($0) }) == false
+        }
+    }
 
-        if lastChangedFileIDs.isEmpty {
-            selectedCommitFileIDs = currentFileIDs
-        } else {
-            selectedCommitFileIDs = selectedCommitFileIDs.intersection(currentFileIDs)
-            selectedCommitFileIDs.formUnion(newFileIDs)
+    private func addUserUnstagedPaths(for files: [ChangedFile]) {
+        for file in files {
+            userUnstagedPaths.formUnion(file.statusPaths)
+        }
+    }
+
+    private func removeUserUnstagedPaths(for files: [ChangedFile]) {
+        for file in files {
+            for path in file.statusPaths {
+                userUnstagedPaths.remove(path)
+            }
+        }
+    }
+
+    private func pruneUserUnstagedPaths(for files: [ChangedFile]) {
+        let changedStatusPaths = Set(files.flatMap(\.statusPaths))
+        userUnstagedPaths = userUnstagedPaths.intersection(changedStatusPaths)
+    }
+
+    private func reconcileSelectedCommit(with history: [GitCommitSummary]) {
+        guard let selectedCommitHash else {
+            return
         }
 
-        lastChangedFileIDs = currentFileIDs
+        guard history.contains(where: { $0.hash == selectedCommitHash }) else {
+            self.selectedCommitHash = nil
+            selectedCommitDetails = nil
+            isCommitDetailsLoading = false
+            return
+        }
+
+        if selectedCommitDetails == nil, isCommitDetailsLoading == false {
+            loadCommitDetails(commitHash: selectedCommitHash)
+        }
+    }
+
+    private func loadCommitDetails(commitHash: String) {
+        guard let repoURL = repositoryContext?.repoURL else {
+            return
+        }
+
+        selectedCommitDetails = nil
+        isCommitDetailsLoading = true
+
+        Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+
+            do {
+                let details = try await repositoryService.fetchCommitDetails(
+                    commitHash: commitHash,
+                    at: repoURL
+                )
+
+                guard self.repositoryContext?.repoURL == repoURL,
+                      self.selectedCommitHash == commitHash else {
+                    return
+                }
+
+                self.selectedCommitDetails = details
+                self.isCommitDetailsLoading = false
+            } catch {
+                guard self.repositoryContext?.repoURL == repoURL,
+                      self.selectedCommitHash == commitHash else {
+                    return
+                }
+
+                self.isCommitDetailsLoading = false
+                self.apply(error: error)
+            }
+        }
     }
 
     private func startRefreshTimer() {
@@ -1461,8 +1697,12 @@ final class DashboardViewModel: ObservableObject {
     private func clearSelectedFileState() {
         selectedFilePath = nil
         selectedFile = nil
-        selectedCommitFileIDs = []
-        lastChangedFileIDs = []
+        selectedCommitHash = nil
+        selectedCommitDetails = nil
+        isCommitDetailsLoading = false
+        isHistoryViewPresented = false
+        commitHistory = []
+        userUnstagedPaths.removeAll()
         commitSummary = ""
         commitDescription = ""
         gitHubAccountUsername = ""

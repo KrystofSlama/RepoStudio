@@ -8,33 +8,6 @@
 import AppKit
 import SwiftUI
 
-@MainActor
-final class RepoStudioAppDelegate: NSObject, NSApplicationDelegate {
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        DispatchQueue.main.async {
-            Self.removeDuplicateSettingsMenuItems(in: NSApp.mainMenu)
-        }
-    }
-
-    static func removeDuplicateSettingsMenuItems(in mainMenu: NSMenu?) {
-        guard let appMenu = mainMenu?.items.first?.submenu else {
-            return
-        }
-
-        let settingsItemIndexes = appMenu.items.indices.filter { index in
-            let title = appMenu.items[index].title
-            return title == "Settings..." || title == "Preferences..."
-        }
-
-        guard settingsItemIndexes.count > 1 else {
-            return
-        }
-
-        for index in settingsItemIndexes.dropLast().reversed() {
-            appMenu.removeItem(at: index)
-        }
-    }
-}
 
 @main
 struct RepoStudioApp: App {
@@ -49,12 +22,6 @@ struct RepoStudioApp: App {
             WorkspaceView()
         }
         .commands {
-            CommandGroup(replacing: .appSettings) {
-                Button("Settings...") {
-                    RepoStudioSettingsPresenter.showSettings()
-                }
-                .keyboardShortcut(",", modifiers: [.command])
-            }
 
             DashboardCommands()
         }
@@ -62,6 +29,56 @@ struct RepoStudioApp: App {
         Settings {
             RepoStudioSettingsView()
         }
+    }
+}
+
+@MainActor
+final class RepoStudioAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        installSettingsMenuDeduper()
+    }
+
+    func applicationDidUpdate(_ notification: Notification) {
+        removeDuplicateSettingsMenuItems(in: NSApp.mainMenu)
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        removeDuplicateSettingsMenuItems(inAppMenu: menu)
+    }
+
+    static func removeDuplicateSettingsMenuItems(in mainMenu: NSMenu?) {
+        guard let appMenu = mainMenu?.items.first?.submenu else {
+            return
+        }
+
+        removeDuplicateSettingsMenuItems(inAppMenu: appMenu)
+    }
+
+    private func installSettingsMenuDeduper() {
+        removeDuplicateSettingsMenuItems(in: NSApp.mainMenu)
+        NSApp.mainMenu?.items.first?.submenu?.delegate = self
+    }
+
+    private static func removeDuplicateSettingsMenuItems(inAppMenu appMenu: NSMenu) {
+        let settingsItems = appMenu.items.filter {
+            $0.title == "Settings..." && $0.keyEquivalent == ","
+        }
+
+        guard settingsItems.count > 1 else {
+            return
+        }
+
+        for item in settingsItems.dropLast() {
+            appMenu.removeItem(item)
+        }
+    }
+
+    private func removeDuplicateSettingsMenuItems(in mainMenu: NSMenu?) {
+        Self.removeDuplicateSettingsMenuItems(in: mainMenu)
+    }
+
+    private func removeDuplicateSettingsMenuItems(inAppMenu appMenu: NSMenu) {
+        Self.removeDuplicateSettingsMenuItems(inAppMenu: appMenu)
     }
 }
 
@@ -98,12 +115,6 @@ enum AppAppearanceMode: String, CaseIterable, Identifiable {
         case .dark:
             return .dark
         }
-    }
-}
-
-enum RepoStudioSettingsPresenter {
-    static func showSettings() {
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }
 }
 

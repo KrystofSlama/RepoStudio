@@ -28,6 +28,7 @@ struct GitStatusParser {
         guard let changeType = GitChangeType.fromStatusCode(statusCode) else {
             return nil
         }
+        let stageState = stageState(from: statusCode)
 
         let remainder = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
         let normalizedRemainder = remainder.replacingOccurrences(of: "\"", with: "")
@@ -41,6 +42,7 @@ struct GitStatusParser {
                     path: newPath,
                     oldPath: oldPath,
                     changeType: .renamed,
+                    stageState: stageState,
                     isMarkdown: isMarkdownFile(path: newPath),
                     isBinary: isBinaryFile(path: newPath)
                 )
@@ -51,9 +53,35 @@ struct GitStatusParser {
             path: normalizedRemainder,
             oldPath: nil,
             changeType: changeType,
+            stageState: stageState,
             isMarkdown: isMarkdownFile(path: normalizedRemainder),
             isBinary: isBinaryFile(path: normalizedRemainder)
         )
+    }
+
+    private func stageState(from statusCode: String) -> GitFileStageState {
+        if statusCode == "??" {
+            return .unstaged
+        }
+
+        if GitChangeType.fromStatusCode(statusCode) == .conflicted {
+            return .conflicted
+        }
+
+        let indexStatus = statusCode.first ?? " "
+        let workTreeStatus = statusCode.dropFirst().first ?? " "
+        let hasStagedChanges = indexStatus != " "
+        let hasUnstagedChanges = workTreeStatus != " "
+
+        if hasStagedChanges, hasUnstagedChanges {
+            return .mixed
+        }
+
+        if hasStagedChanges {
+            return .staged
+        }
+
+        return .unstaged
     }
 
     private func isMarkdownFile(path: String) -> Bool {

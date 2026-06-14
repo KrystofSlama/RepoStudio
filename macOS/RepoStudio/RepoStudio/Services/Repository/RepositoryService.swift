@@ -13,10 +13,16 @@ protocol RepositoryService {
     func fetchRepositoryFiles(at url: URL) async throws -> [RepositoryFile]
     func fetchDiffLines(at url: URL, for file: ChangedFile) async throws -> [DiffLine]
     func commit(files: [ChangedFile], summary: String, description: String, at url: URL) async throws
+    func stageFiles(_ files: [ChangedFile], at url: URL) async throws
+    func unstageFiles(_ files: [ChangedFile], at url: URL) async throws
     func createBranch(named branchName: String, at url: URL) async throws
     func checkoutBranch(named branchName: String, at url: URL) async throws
+    func checkoutRemoteBranch(_ branch: GitBranch, at url: URL) async throws
+    func deleteBranch(_ branch: GitBranch, at url: URL) async throws
     func refreshRemoteBranches(at url: URL) async throws
     func fetchBranches(at url: URL) async throws -> [GitBranch]
+    func fetchCommitHistory(at url: URL) async throws -> [GitCommitSummary]
+    func fetchCommitDetails(commitHash: String, at url: URL) async throws -> GitCommitDetails
     func pullCurrentBranch(at url: URL) async throws
     func pushCurrentBranch(at url: URL) async throws
     func publishCurrentBranch(remoteName: String, at url: URL) async throws

@@ -131,6 +131,16 @@ struct GitCLIRepositoryService: RepositoryService {
             return
         }
 
+        var commitCommand = ["commit", "-m", trimmedSummary]
+        let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedDescription.isEmpty == false {
+            commitCommand.append(contentsOf: ["-m", trimmedDescription])
+        }
+
+        _ = try await runRepositoryCommand(in: url, command: commitCommand)
+    }
+
+    func stageFiles(_ files: [ChangedFile], at url: URL) async throws {
         let paths = commitPaths(for: files)
         guard paths.isEmpty == false else {
             return
@@ -140,14 +150,18 @@ struct GitCLIRepositoryService: RepositoryService {
             in: url,
             command: ["add", "-A", "--"] + paths
         )
+    }
 
-        var commitCommand = ["commit", "-m", trimmedSummary]
-        let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmedDescription.isEmpty == false {
-            commitCommand.append(contentsOf: ["-m", trimmedDescription])
+    func unstageFiles(_ files: [ChangedFile], at url: URL) async throws {
+        let paths = commitPaths(for: files)
+        guard paths.isEmpty == false else {
+            return
         }
 
-        _ = try await runRepositoryCommand(in: url, command: commitCommand)
+        _ = try await runRepositoryCommand(
+            in: url,
+            command: ["restore", "--staged", "--"] + paths
+        )
     }
 
     func createBranch(named branchName: String, at url: URL) async throws {
@@ -174,6 +188,28 @@ struct GitCLIRepositoryService: RepositoryService {
         )
     }
 
+    func checkoutRemoteBranch(_ branch: GitBranch, at url: URL) async throws {
+        guard branch.isRemote, branch.name.isEmpty == false else {
+            return
+        }
+
+        _ = try await runRepositoryCommand(
+            in: url,
+            command: ["switch", "--track", branch.name]
+        )
+    }
+
+    func deleteBranch(_ branch: GitBranch, at url: URL) async throws {
+        guard branch.isRemote == false, branch.isCurrent == false, branch.name.isEmpty == false else {
+            return
+        }
+
+        _ = try await runRepositoryCommand(
+            in: url,
+            command: ["branch", "-d", branch.name]
+        )
+    }
+
     func refreshRemoteBranches(at url: URL) async throws {
         let remoteOutput = try await runRepositoryCommand(
             in: url,
@@ -197,6 +233,60 @@ struct GitCLIRepositoryService: RepositoryService {
         )
 
         return parseBranches(output)
+    }
+
+    func fetchCommitHistory(at url: URL) async throws -> [GitCommitSummary] {
+        let output: String
+        do {
+            output = try await runRepositoryCommand(
+                in: url,
+                command: [
+                    "log",
+                    "-n", "30",
+                    "--date=iso-strict",
+                    "--pretty=format:%H%x1f%h%x1f%an%x1f%ad%x1f%s%x1e"
+                ]
+            )
+        } catch let error as DashboardError {
+            if isEmptyHistoryError(error) {
+                return []
+            }
+            throw error
+        }
+
+        return parseCommitHistory(output)
+    }
+
+    func fetchCommitDetails(commitHash: String, at url: URL) async throws -> GitCommitDetails {
+        let trimmedHash = commitHash.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedHash.isEmpty == false else {
+            throw DashboardError.invalidGitOutput(commitHash)
+        }
+
+        let metadataOutput = try await runRepositoryCommand(
+            in: url,
+            command: [
+                "show",
+                "--no-ext-diff",
+                "--name-status",
+                "--date=iso-strict",
+                "--format=%H%x1f%h%x1f%an%x1f%ad%x1f%s%x1f%b%x1e",
+                trimmedHash
+            ]
+        )
+        let patchOutput = try await runRepositoryCommand(
+            in: url,
+            command: [
+                "show",
+                "--no-ext-diff",
+                "--format=",
+                "--no-color",
+                "--unified=3",
+                trimmedHash
+            ]
+        )
+
+        return try parseCommitDetails(metadataOutput, diffOutput: patchOutput)
     }
 
     func pullCurrentBranch(at url: URL) async throws {
@@ -471,6 +561,84 @@ struct GitCLIRepositoryService: RepositoryService {
         )
     }
 
+    private func parseCommitHistory(_ output: String) -> [GitCommitSummary] {
+        output
+            .split(separator: "\u{1e}", omittingEmptySubsequences: true)
+            .compactMap { record -> GitCommitSummary? in
+                let columns = record.split(separator: "\u{1f}", omittingEmptySubsequences: false).map(String.init)
+                guard columns.count >= 5 else {
+                    return nil
+                }
+
+                return GitCommitSummary(
+                    hash: columns[0].trimmingCharacters(in: .whitespacesAndNewlines),
+                    shortHash: columns[1].trimmingCharacters(in: .whitespacesAndNewlines),
+                    author: columns[2].trimmingCharacters(in: .whitespacesAndNewlines),
+                    date: columns[3].trimmingCharacters(in: .whitespacesAndNewlines),
+                    subject: columns[4].trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+            }
+            .filter { $0.hash.isEmpty == false }
+    }
+
+    private func parseCommitDetails(_ metadataOutput: String, diffOutput: String) throws -> GitCommitDetails {
+        let parts = metadataOutput.split(separator: "\u{1e}", maxSplits: 1, omittingEmptySubsequences: false)
+        guard let header = parts.first else {
+            throw DashboardError.invalidGitOutput(metadataOutput)
+        }
+
+        let columns = header.split(separator: "\u{1f}", omittingEmptySubsequences: false).map(String.init)
+        guard columns.count >= 6 else {
+            throw DashboardError.invalidGitOutput(metadataOutput)
+        }
+
+        let summary = GitCommitSummary(
+            hash: columns[0].trimmingCharacters(in: .whitespacesAndNewlines),
+            shortHash: columns[1].trimmingCharacters(in: .whitespacesAndNewlines),
+            author: columns[2].trimmingCharacters(in: .whitespacesAndNewlines),
+            date: columns[3].trimmingCharacters(in: .whitespacesAndNewlines),
+            subject: columns[4].trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        let body = columns[5].trimmingCharacters(in: .whitespacesAndNewlines)
+        let nameStatusOutput = parts.count > 1 ? String(parts[1]) : ""
+        let changedFiles = parseCommitChangedFiles(nameStatusOutput)
+        let diffLines = diffParser.parse(diffOutput.trimmingCharacters(in: .whitespacesAndNewlines))
+
+        return GitCommitDetails(
+            summary: summary,
+            body: body,
+            changedFiles: changedFiles,
+            diffLines: diffLines
+        )
+    }
+
+    private func parseCommitChangedFiles(_ output: String) -> [GitCommitChangedFile] {
+        output
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .compactMap { line -> GitCommitChangedFile? in
+                let columns = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+                guard columns.count >= 2 else {
+                    return nil
+                }
+
+                let status = columns[0]
+                let changeType = GitChangeType.fromStatusCode(status.padding(toLength: 2, withPad: " ", startingAt: 0)) ?? .modified
+                if status.hasPrefix("R"), columns.count >= 3 {
+                    return GitCommitChangedFile(
+                        path: columns[2],
+                        oldPath: columns[1],
+                        changeType: .renamed
+                    )
+                }
+
+                return GitCommitChangedFile(
+                    path: columns[1],
+                    oldPath: nil,
+                    changeType: changeType
+                )
+            }
+    }
+
     private func isMissingUpstreamError(_ error: DashboardError) -> Bool {
         guard case let .gitCommandFailed(_, message) = error else {
             return false
@@ -481,6 +649,18 @@ struct GitCLIRepositoryService: RepositoryService {
             || lowered.contains("no upstream branch")
             || lowered.contains("upstream branch")
             || lowered.contains("@{u}")
+    }
+
+    private func isEmptyHistoryError(_ error: DashboardError) -> Bool {
+        guard case let .gitCommandFailed(_, message) = error else {
+            return false
+        }
+
+        let lowered = message.lowercased()
+        return lowered.contains("does not have any commits yet")
+            || lowered.contains("your current branch") && lowered.contains("does not have any commits")
+            || lowered.contains("bad default revision 'head'")
+            || lowered.contains("ambiguous argument 'head'")
     }
 
     private func fetchConfiguredGitHubCredentialUsername(in repoURL: URL) async throws -> String? {

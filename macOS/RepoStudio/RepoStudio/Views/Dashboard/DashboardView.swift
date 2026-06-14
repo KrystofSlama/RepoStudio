@@ -8,13 +8,16 @@ import SwiftUI
 enum DashboardSidebarSelection: Hashable {
     case repositoryFile(path: String)
     case changedFile(fileID: String, path: String)
+    case commit(hash: String)
 
-    var path: String {
+    var path: String? {
         switch self {
         case .repositoryFile(let path):
             return path
         case .changedFile(_, let path):
             return path
+        case .commit:
+            return nil
         }
     }
 }
@@ -67,6 +70,9 @@ struct DashboardView: View {
         .onChange(of: viewModel.selectedFilePath) {
             syncSidebarSelectionWithViewModel()
         }
+        .onChange(of: viewModel.selectedCommitHash) {
+            syncSidebarSelectionWithViewModel()
+        }
         .onChange(of: viewModel.repositoryContext?.repoURL.path) {
             sidebarSelection = nil
         }
@@ -78,6 +84,27 @@ struct DashboardView: View {
         }
         .sheet(isPresented: $viewModel.isGitHubAccountSheetPresented) {
             GitHubAccountSheet(viewModel: viewModel)
+        }
+        .alert(
+            "Delete Branch?",
+            isPresented: Binding(
+                get: { viewModel.branchDeletionCandidate != nil },
+                set: { value in
+                    if value == false {
+                        viewModel.cancelDeleteBranch()
+                    }
+                }
+            )
+        ) {
+            Button("Delete Branch", role: .destructive) {
+                viewModel.confirmDeleteBranch()
+            }
+            Button("Cancel", role: .cancel) {
+                viewModel.cancelDeleteBranch()
+            }
+        } message: {
+            let branchName = viewModel.branchDeletionCandidate?.name ?? "this branch"
+            Text("Delete local branch \(branchName)? This will not delete the remote branch.")
         }
         .alert(
             "Repository Error",

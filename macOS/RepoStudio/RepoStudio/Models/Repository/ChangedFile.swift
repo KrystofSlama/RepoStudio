@@ -9,11 +9,12 @@ struct ChangedFile: Identifiable, Hashable {
     let path: String
     let oldPath: String?
     let changeType: GitChangeType
+    let stageState: GitFileStageState
     let isMarkdown: Bool
     let isBinary: Bool
 
     var id: String {
-        "\(changeType.rawValue)|\(oldPath ?? "")|\(path)"
+        "\(stageState.rawValue)|\(changeType.rawValue)|\(oldPath ?? "")|\(path)"
     }
 
     var fileName: String {
@@ -31,5 +32,24 @@ struct ChangedFile: Identifiable, Hashable {
         }
 
         return path
+    }
+
+    var statusPaths: [String] {
+        var paths: [String] = []
+        if let oldPath, oldPath.isEmpty == false {
+            paths.append(oldPath)
+        }
+        if path.isEmpty == false {
+            paths.append(path)
+        }
+        return paths
+    }
+
+    var canStage: Bool {
+        stageState.hasUnstagedChanges
+    }
+
+    var canUnstage: Bool {
+        stageState.hasStagedChanges
     }
 }

@@ -75,9 +75,7 @@ struct DashboardToolbar: ToolbarContent {
 
     var body: some ToolbarContent {
         ToolbarItemGroup {
-            Button {
-                RepoStudioSettingsPresenter.showSettings()
-            } label: {
+            SettingsLink {
                 Label("Settings", systemImage: "gearshape")
             }
             .help("Settings")
@@ -383,7 +381,7 @@ extension DashboardView {
                 }
             } else {
                 ForEach(viewModel.groupedChangedFiles, id: \.0) { group in
-                    Section("Git Changes · \(group.0.displayName)") {
+                    Section {
                         ForEach(group.1) { file in
                             SidebarChangedFileRow(
                                 file: file,
@@ -395,6 +393,12 @@ extension DashboardView {
                                 }
                             )
                         }
+                    } header: {
+                        SidebarStageGroupHeader(
+                            stageState: group.0,
+                            files: group.1,
+                            viewModel: viewModel
+                        )
                     }
                 }
             }
@@ -411,10 +415,23 @@ extension DashboardView {
 
     func selectSidebarRow(_ selection: DashboardSidebarSelection) {
         sidebarSelection = selection
-        viewModel.selectFile(path: selection.path)
+
+        switch selection {
+        case .repositoryFile, .changedFile:
+            viewModel.selectFile(path: selection.path)
+        case .commit(let hash):
+            if let commit = viewModel.commitHistory.first(where: { $0.hash == hash }) {
+                viewModel.selectCommit(commit)
+            }
+        }
     }
 
     func syncSidebarSelectionWithViewModel() {
+        if let selectedCommitHash = viewModel.selectedCommitHash {
+            sidebarSelection = .commit(hash: selectedCommitHash)
+            return
+        }
+
         guard let selectedPath = viewModel.selectedFilePath else {
             sidebarSelection = nil
             return
@@ -438,7 +455,9 @@ extension DashboardView {
 
     var canvas: some View {
         Group {
-            if viewModel.selectedFilePath != nil {
+            if viewModel.isHistoryViewPresented {
+                commitHistoryCanvas
+            } else if viewModel.selectedFilePath != nil {
                 if viewModel.selectedIsDeleted {
                     if shouldShowDiffCanvas {
                         diffCanvas(fileName: viewModel.selectedFileName)
@@ -462,6 +481,136 @@ extension DashboardView {
                 }
             } else {
                 EmptyCanvasState()
+            }
+        }
+    }
+
+    var commitHistoryCanvas: some View {
+        HSplitView {
+            historyCommitList
+                .frame(minWidth: 240, idealWidth: 300)
+
+            commitDetailsPane
+                .frame(minWidth: 420)
+        }
+        .navigationTitle("History")
+    }
+
+    var historyCommitList: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 8) {
+                if viewModel.commitHistory.isEmpty {
+                    Text("No commits on this branch.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(16)
+                } else {
+                    ForEach(viewModel.commitHistory) { commit in
+                        Button {
+                            viewModel.selectCommit(commit)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(commit.shortHash)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                Text(commit.subject)
+                                    .font(.body.weight(.semibold))
+                                    .lineLimit(3)
+                                Text(commit.author)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                viewModel.selectedCommitHash == commit.hash
+                                    ? Color.accentColor.opacity(0.18)
+                                    : Color.clear,
+                                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .padding(12)
+        }
+        .background(.thinMaterial)
+    }
+
+    var commitDetailsPane: some View {
+        Group {
+            if viewModel.isCommitDetailsLoading {
+                ProgressView("Loading commit...")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let details = viewModel.selectedCommitDetails {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(details.summary.subject)
+                                .font(.title2.weight(.semibold))
+                                .textSelection(.enabled)
+
+                            HStack(spacing: 12) {
+                                Text(details.summary.shortHash)
+                                    .font(.callout.monospaced())
+                                Text(details.summary.author)
+                                Text(details.summary.date)
+                            }
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+
+                            if details.body.isEmpty == false {
+                                Text(details.body)
+                                    .textSelection(.enabled)
+                            }
+                        }
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Changed Files")
+                                .font(.headline)
+
+                            ForEach(details.changedFiles) { file in
+                                HStack(spacing: 8) {
+                                    ChangeBadge(changeType: file.changeType)
+                                    Text(file.displayPath)
+                                        .lineLimit(1)
+                                        .textSelection(.enabled)
+                                    Spacer()
+                                }
+                                .padding(.vertical, 2)
+                            }
+                        }
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Diff")
+                                .font(.headline)
+
+                            if details.diffLines.isEmpty {
+                                Text("No textual diff available for this commit.")
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                UnifiedDiffView(lines: details.diffLines)
+                                    .frame(minHeight: 360)
+                            }
+                        }
+                    }
+                    .padding(20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .navigationTitle(details.summary.shortHash)
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 28))
+                    Text("Select a commit")
+                        .font(.headline)
+                    Text("Pick a commit from History to inspect its metadata and diff.")
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
@@ -643,9 +792,15 @@ extension DashboardView {
 
                 Divider()
 
-                if let selectedPath = viewModel.selectedDisplayPath {
+                if let details = viewModel.selectedCommitDetails {
+                    InfoRow(label: "Commit", value: details.summary.hash)
+                    InfoRow(label: "Author", value: details.summary.author)
+                    InfoRow(label: "Date", value: details.summary.date)
+                    InfoRow(label: "Files", value: "\(details.changedFiles.count)")
+                } else if let selectedPath = viewModel.selectedDisplayPath {
                     InfoRow(label: "Path", value: selectedPath)
                     InfoRow(label: "Status", value: viewModel.selectedStatusText)
+                    InfoRow(label: "Stage", value: viewModel.selectedStageText)
                     InfoRow(label: "Type", value: viewModel.selectedTypeText)
                     InfoRow(label: "Tracking", value: viewModel.selectedTrackedText)
 
@@ -706,12 +861,30 @@ extension DashboardView {
                     }
                 }
 
+                let deletableBranches = viewModel.localBranches.filter { $0.isCurrent == false }
+                if deletableBranches.isEmpty == false {
+                    Divider()
+                    Text("Delete Local Branch")
+                    ForEach(deletableBranches) { branch in
+                        Button(role: .destructive) {
+                            viewModel.requestDeleteBranch(branch)
+                        } label: {
+                            Label(branch.name, systemImage: "trash")
+                        }
+                        .disabled(viewModel.isGitOperationInProgress)
+                    }
+                }
+
                 if viewModel.remoteBranches.isEmpty == false {
                     Divider()
                     Text("Remote Branches")
                     ForEach(viewModel.remoteBranches) { branch in
-                        Button(branch.name) {}
-                            .disabled(true)
+                        Button {
+                            viewModel.checkoutBranch(branch)
+                        } label: {
+                            Label(branch.name, systemImage: "arrow.down.to.line")
+                        }
+                        .disabled(viewModel.isGitOperationInProgress)
                     }
                 }
             } label: {
@@ -790,7 +963,7 @@ extension DashboardView {
                     .disabled(viewModel.isGitOperationInProgress)
 
                 HStack {
-                    Text("\(viewModel.selectedCommitFileCount) of \(viewModel.changedFiles.count) selected")
+                    Text("\(viewModel.selectedCommitFileCount) staged of \(viewModel.changedFiles.count) changed")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -816,6 +989,16 @@ extension DashboardView {
                     Text("No changes to commit.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                } else if viewModel.selectedCommitFileCount == 0 {
+                    Text("Stage files before committing.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let conflictWarningText = viewModel.conflictWarningText {
+                    Label(conflictWarningText, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.red)
                 }
             }
         }
@@ -861,6 +1044,15 @@ extension DashboardView {
                         if viewModel.gitHubAccountState.isGitHubRemote {
                             GitHubAccountMenu(viewModel: viewModel)
                         }
+
+                        Button {
+                            viewModel.showHistoryView()
+                        } label: {
+                            Label("History", systemImage: "clock.arrow.circlepath")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(viewModel.commitHistory.isEmpty)
+                        .help("Show commit history")
 
                         Text(viewModel.syncStatusText)
                             .font(.caption)
@@ -1023,18 +1215,6 @@ extension DashboardView {
         var body: some View {
             HStack(spacing: 6) {
                 Button {
-                    viewModel.toggleCommitFileSelection(file)
-                } label: {
-                    Image(systemName: viewModel.isCommitFileSelected(file) ? "checkmark.square.fill" : "square")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(viewModel.isCommitFileSelected(file) ? Color.accentColor : .secondary)
-                        .frame(width: 18, height: 22)
-                }
-                .buttonStyle(.plain)
-                .disabled(viewModel.isGitOperationInProgress)
-                .help(viewModel.isCommitFileSelected(file) ? "Exclude from commit" : "Include in commit")
-
-                Button {
                     onSelect(selection)
                 } label: {
                     HStack(spacing: 4) {
@@ -1054,8 +1234,91 @@ extension DashboardView {
                     .padding(.vertical, 2)
                 }
                 .buttonStyle(.plain)
+
+                if file.stageState == .conflicted {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.red)
+                        .help("Resolve conflict before committing or syncing")
+                } else {
+                    if file.canStage {
+                        Button {
+                            viewModel.stageFile(file)
+                        } label: {
+                            Image(systemName: "plus.square")
+                                .font(.system(size: 14, weight: .semibold))
+                                .frame(width: 18, height: 22)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(viewModel.isGitOperationInProgress)
+                        .help("Stage file")
+                    }
+
+                    if file.canUnstage {
+                        Button {
+                            viewModel.unstageFile(file)
+                        } label: {
+                            Image(systemName: "minus.square")
+                                .font(.system(size: 14, weight: .semibold))
+                                .frame(width: 18, height: 22)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(viewModel.isGitOperationInProgress)
+                        .help("Unstage file")
+                    }
+                }
             }
+            .padding(.trailing, 10)
             .listRowBackground(isSelected ? Color.accentColor.opacity(0.22) : Color.clear)
+        }
+    }
+
+    struct SidebarStageGroupHeader: View {
+        let stageState: GitFileStageState
+        let files: [ChangedFile]
+        @ObservedObject var viewModel: DashboardViewModel
+
+        private var stageableFiles: [ChangedFile] {
+            files.filter { $0.canStage && $0.stageState != .conflicted }
+        }
+
+        private var unstageableFiles: [ChangedFile] {
+            files.filter { $0.canUnstage && $0.stageState != .conflicted }
+        }
+
+        var body: some View {
+            HStack(spacing: 8) {
+                Text(stageState.displayName)
+                Text("\(files.count)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+
+                if stageableFiles.isEmpty == false {
+                    Button {
+                        viewModel.stageFiles(stageableFiles)
+                    } label: {
+                        Image(systemName: "plus.square.on.square")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(viewModel.isGitOperationInProgress)
+                    .help("Stage all in group")
+                }
+
+                if unstageableFiles.isEmpty == false {
+                    Button {
+                        viewModel.unstageFiles(unstageableFiles)
+                    } label: {
+                        Image(systemName: "minus.square.on.square")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(viewModel.isGitOperationInProgress)
+                    .help("Unstage all in group")
+                }
+            }
+            .padding(.trailing, 10)
         }
     }
 
@@ -1204,6 +1467,8 @@ extension DashboardView {
                 return .orange
             case .untracked:
                 return .green
+            case .conflicted:
+                return .red
             }
         }
     }

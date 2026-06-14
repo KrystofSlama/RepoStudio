@@ -48,3 +48,38 @@ struct GitHubAccountState: Hashable {
         isGitHubRemote: false
     )
 }
+
+struct GitCommitSummary: Identifiable, Hashable {
+    let hash: String
+    let shortHash: String
+    let author: String
+    let date: String
+    let subject: String
+
+    var id: String { hash }
+}
+
+struct GitCommitChangedFile: Identifiable, Hashable {
+    let path: String
+    let oldPath: String?
+    let changeType: GitChangeType
+
+    var id: String {
+        "\(changeType.rawValue)|\(oldPath ?? "")|\(path)"
+    }
+
+    var displayPath: String {
+        if let oldPath {
+            return "\(oldPath) -> \(path)"
+        }
+
+        return path
+    }
+}
+
+struct GitCommitDetails: Hashable {
+    let summary: GitCommitSummary
+    let body: String
+    let changedFiles: [GitCommitChangedFile]
+    let diffLines: [DiffLine]
+}
