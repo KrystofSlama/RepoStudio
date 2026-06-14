@@ -381,6 +381,13 @@ final class DashboardViewModel: ObservableObject {
         return "Refresh"
     }
 
+    var shouldShowPrimarySyncAction: Bool {
+        activeGitOperationLabel != nil
+            || remoteTrackingState.isPublished == false
+            || remoteTrackingState.behindCount > 0
+            || remoteTrackingState.aheadCount > 0
+    }
+
     var primarySyncActionSymbolName: String {
         if remoteTrackingState.isPublished == false {
             return "square.and.arrow.up"

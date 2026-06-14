@@ -15,12 +15,15 @@ struct DashboardCommandActions {
     let isInspectorVisible: Bool
     let primarySyncActionTitle: String
     let canPerformPrimarySyncAction: Bool
+    let shouldShowPrimarySyncAction: Bool
+    let canShowHistory: Bool
 
     let openRepository: () -> Void
     let openRecentRepository: (String) -> Void
     let refreshRepositoryState: () -> Void
     let performPrimarySyncAction: () -> Void
     let showNewBranchSheet: () -> Void
+    let showHistory: () -> Void
     let toggleInspector: () -> Void
     let toggleSidebar: () -> Void
     let setCanvasMode: (DashboardViewModel.CanvasMode) -> Void
@@ -31,6 +34,8 @@ struct DashboardCommandActions {
         isInspectorVisible = viewModel.isInspectorVisible
         primarySyncActionTitle = viewModel.primarySyncActionTitle
         canPerformPrimarySyncAction = viewModel.canPerformPrimarySyncAction
+        shouldShowPrimarySyncAction = viewModel.shouldShowPrimarySyncAction
+        canShowHistory = viewModel.commitHistory.isEmpty == false
 
         openRepository = { [weak viewModel] in
             viewModel?.openRepository()
@@ -46,6 +51,9 @@ struct DashboardCommandActions {
         }
         showNewBranchSheet = { [weak viewModel] in
             viewModel?.showNewBranchSheet()
+        }
+        showHistory = { [weak viewModel] in
+            viewModel?.showHistoryView()
         }
         toggleInspector = { [weak viewModel] in
             viewModel?.toggleInspector()
@@ -75,11 +83,6 @@ struct DashboardToolbar: ToolbarContent {
 
     var body: some ToolbarContent {
         ToolbarItemGroup {
-            SettingsLink {
-                Label("Settings", systemImage: "gearshape")
-            }
-            .help("Settings")
-
             Picker("Mode", selection: Binding(
                 get: { viewModel.canvasMode },
                 set: { viewModel.setCanvasMode($0) }
@@ -148,12 +151,19 @@ struct DashboardCommands: Commands {
             }
             .disabled(commandActions?.isRepositoryOpen != true)
 
+            Button("History") {
+                commandActions?.showHistory()
+            }
+            .disabled(commandActions?.canShowHistory != true)
+
             Divider()
 
-            Button(commandActions?.primarySyncActionTitle ?? "Sync") {
-                commandActions?.performPrimarySyncAction()
+            if commandActions?.shouldShowPrimarySyncAction == true {
+                Button(commandActions?.primarySyncActionTitle ?? "Sync") {
+                    commandActions?.performPrimarySyncAction()
+                }
+                .disabled(commandActions?.canPerformPrimarySyncAction != true)
             }
-            .disabled(commandActions?.canPerformPrimarySyncAction != true)
 
             Button("New Branch...") {
                 commandActions?.showNewBranchSheet()
@@ -488,7 +498,7 @@ extension DashboardView {
     var commitHistoryCanvas: some View {
         HSplitView {
             historyCommitList
-                .frame(minWidth: 240, idealWidth: 300)
+                .frame(minWidth: 420, idealWidth: 420, maxWidth: 420)
 
             commitDetailsPane
                 .frame(minWidth: 420)
@@ -524,6 +534,7 @@ extension DashboardView {
                             .padding(.horizontal, 12)
                             .padding(.vertical, 10)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                             .background(
                                 viewModel.selectedCommitHash == commit.hash
                                     ? Color.accentColor.opacity(0.18)
@@ -1008,56 +1019,53 @@ extension DashboardView {
         @ObservedObject var viewModel: DashboardViewModel
 
         var body: some View {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
                     Label("Current Repository", systemImage: "folder")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Button {
-                        viewModel.refreshRepositoryState(refreshRemoteBranches: true)
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .buttonStyle(.plain)
-                    .help("Refresh repository status")
                 }
 
                 if let context = viewModel.repositoryContext {
-                    Text(context.repoName)
-                        .font(.headline)
+                    HStack(spacing: 8) {
+                        Text(context.repoName)
+                            .font(.headline)
+                            .lineLimit(1)
+
+                        Spacer()
+
+                        if viewModel.isGitRepository {
+                            BranchPickerMenu(viewModel: viewModel)
+                                .frame(maxWidth: 170)
+                        }
+                    }
 
                     if viewModel.isGitRepository {
-                        HStack(spacing: 8) {
-                            BranchPickerMenu(viewModel: viewModel)
-
-                            Button {
-                                viewModel.performPrimarySyncAction()
-                            } label: {
-                                Label(viewModel.primarySyncActionTitle, systemImage: viewModel.primarySyncActionSymbolName)
+                        VStack(alignment: .leading, spacing: 8) {
+                            if viewModel.gitHubAccountState.isGitHubRemote {
+                                GitHubAccountMenu(viewModel: viewModel)
+                                    .frame(maxWidth: .infinity)
                             }
-                            .buttonStyle(.bordered)
-                            .disabled(viewModel.canPerformPrimarySyncAction == false)
-                            .help(viewModel.primarySyncActionTitle)
-                        }
 
-                        if viewModel.gitHubAccountState.isGitHubRemote {
-                            GitHubAccountMenu(viewModel: viewModel)
-                        }
+                            if viewModel.shouldShowPrimarySyncAction {
+                                Button {
+                                    viewModel.performPrimarySyncAction()
+                                } label: {
+                                    Label(viewModel.primarySyncActionTitle, systemImage: viewModel.primarySyncActionSymbolName)
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.bordered)
+                                .frame(maxWidth: .infinity)
+                                .disabled(viewModel.canPerformPrimarySyncAction == false)
+                                .help(viewModel.primarySyncActionTitle)
+                            }
 
-                        Button {
-                            viewModel.showHistoryView()
-                        } label: {
-                            Label("History", systemImage: "clock.arrow.circlepath")
+                            Text(viewModel.syncStatusText)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
                         }
-                        .buttonStyle(.bordered)
-                        .disabled(viewModel.commitHistory.isEmpty)
-                        .help("Show commit history")
-
-                        Text(viewModel.syncStatusText)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
                     } else {
                         Text(viewModel.folderWorkspaceReason)
                             .font(.subheadline)
