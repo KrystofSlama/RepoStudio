@@ -82,7 +82,21 @@ struct DashboardToolbar: ToolbarContent {
     @ObservedObject var viewModel: DashboardViewModel
 
     var body: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            RepositoryToolbarTitle(viewModel: viewModel)
+        }
+
         ToolbarItemGroup {
+            if viewModel.isGitRepository {
+                Button {
+                    viewModel.performPrimarySyncAction()
+                } label: {
+                    Label(viewModel.primarySyncActionTitle, systemImage: viewModel.primarySyncActionSymbolName)
+                }
+                .disabled(viewModel.canPerformPrimarySyncAction == false)
+                .help(viewModel.primarySyncActionTitle)
+            }
+
             Picker("Mode", selection: Binding(
                 get: { viewModel.canvasMode },
                 set: { viewModel.setCanvasMode($0) }
@@ -100,6 +114,188 @@ struct DashboardToolbar: ToolbarContent {
                 Label("Toggle Inspector", systemImage: "sidebar.right")
             }
         }
+    }
+}
+
+struct RepositoryToolbarTitle: View {
+    @ObservedObject var viewModel: DashboardViewModel
+    @State private var isBranchPopoverPresented = false
+    @State private var branchSearchText = ""
+
+    var body: some View {
+        Button {
+            isBranchPopoverPresented.toggle()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: viewModel.isGitRepository ? "point.topleft.down.curvedto.point.bottomright.up" : "folder")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(viewModel.windowTitle)
+                        .font(.headline)
+                        .lineLimit(1)
+
+                    HStack(spacing: 4) {
+                        Text(viewModel.repositoryContext?.branchName ?? "No Branch")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+
+                        if viewModel.isGitRepository {
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(viewModel.isGitRepository == false)
+        .popover(isPresented: $isBranchPopoverPresented, arrowEdge: .top) {
+            BranchSelectionPopover(
+                viewModel: viewModel,
+                searchText: $branchSearchText,
+                isPresented: $isBranchPopoverPresented
+            )
+        }
+        .help("Switch branches")
+    }
+}
+
+struct BranchSelectionPopover: View {
+    @ObservedObject var viewModel: DashboardViewModel
+    @Binding var searchText: String
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            TextField("Find", text: $searchText)
+                .textFieldStyle(.roundedBorder)
+
+            if let currentBranch = viewModel.localBranches.first(where: { $0.isCurrent }) {
+                branchSection(title: "Current Branch") {
+                    BranchPopoverRow(branch: currentBranch, subtitle: viewModel.syncStatusText, isCurrent: true) {}
+                }
+            }
+
+            if filteredLocalBranches.isEmpty == false {
+                branchSection(title: "Branches") {
+                    ForEach(filteredLocalBranches) { branch in
+                        BranchPopoverRow(branch: branch, subtitle: nil, isCurrent: branch.isCurrent) {
+                            viewModel.checkoutBranch(branch)
+                            isPresented = false
+                        }
+                        .disabled(branch.isCurrent || viewModel.isGitOperationInProgress)
+                        .contextMenu {
+                            if branch.isCurrent == false {
+                                Button("Delete Local Branch", role: .destructive) {
+                                    viewModel.requestDeleteBranch(branch)
+                                    isPresented = false
+                                }
+                                .disabled(viewModel.isGitOperationInProgress)
+                            }
+                        }
+                    }
+                }
+            }
+
+            if filteredRemoteBranches.isEmpty == false {
+                branchSection(title: "Remote Branches") {
+                    ForEach(filteredRemoteBranches) { branch in
+                        BranchPopoverRow(branch: branch, subtitle: "Checkout tracking branch", isCurrent: false) {
+                            viewModel.checkoutBranch(branch)
+                            isPresented = false
+                        }
+                        .disabled(viewModel.isGitOperationInProgress)
+                    }
+                }
+            }
+
+            Divider()
+
+            Button("New Branch...") {
+                viewModel.showNewBranchSheet()
+                isPresented = false
+            }
+            .disabled(viewModel.isGitOperationInProgress)
+        }
+        .padding(18)
+        .frame(width: 430)
+    }
+
+    private var filteredLocalBranches: [GitBranch] {
+        filtered(viewModel.localBranches.filter { $0.isCurrent == false })
+    }
+
+    private var filteredRemoteBranches: [GitBranch] {
+        filtered(viewModel.remoteBranches)
+    }
+
+    private func filtered(_ branches: [GitBranch]) -> [GitBranch] {
+        let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedSearch.isEmpty == false else {
+            return branches
+        }
+
+        return branches.filter { branch in
+            branch.name.localizedCaseInsensitiveContains(trimmedSearch)
+        }
+    }
+
+    @ViewBuilder
+    private func branchSection<Content: View>(
+        title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 4) {
+                content()
+            }
+        }
+    }
+}
+
+struct BranchPopoverRow: View {
+    let branch: GitBranch
+    let subtitle: String?
+    let isCurrent: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: isCurrent ? "checkmark.circle.fill" : "point.topleft.down.curvedto.point.bottomright.up")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(isCurrent ? Color.accentColor : Color.secondary)
+                    .frame(width: 28)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(branch.name)
+                        .font(.body)
+                        .lineLimit(1)
+
+                    if let subtitle, subtitle.isEmpty == false {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer()
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -347,9 +543,6 @@ extension DashboardView {
     //MARK: -Subviews
     var sidebar: some View {
         List {
-            SidebarRepositoryHeader(viewModel: viewModel)
-                .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
-
             Section {
                 TextField("Search (.md or filename)", text: $viewModel.searchText)
                     .textFieldStyle(.roundedBorder)
@@ -841,120 +1034,6 @@ extension DashboardView {
     }
 
     //MARK: -Rows
-    struct BranchPickerMenu: View {
-        @ObservedObject var viewModel: DashboardViewModel
-
-        var body: some View {
-            Menu {
-                Button("New Branch...") {
-                    viewModel.showNewBranchSheet()
-                }
-                .disabled(viewModel.isGitOperationInProgress)
-
-                Divider()
-
-                if viewModel.localBranches.isEmpty {
-                    Text("No Local Branches")
-                } else {
-                    ForEach(viewModel.localBranches) { branch in
-                        Button {
-                            viewModel.checkoutBranch(branch)
-                        } label: {
-                            HStack {
-                                Text(branch.name)
-                                if branch.isCurrent {
-                                    Spacer()
-                                    Image(systemName: "checkmark")
-                                }
-                            }
-                        }
-                        .disabled(branch.isCurrent || viewModel.isGitOperationInProgress)
-                    }
-                }
-
-                let deletableBranches = viewModel.localBranches.filter { $0.isCurrent == false }
-                if deletableBranches.isEmpty == false {
-                    Divider()
-                    Text("Delete Local Branch")
-                    ForEach(deletableBranches) { branch in
-                        Button(role: .destructive) {
-                            viewModel.requestDeleteBranch(branch)
-                        } label: {
-                            Label(branch.name, systemImage: "trash")
-                        }
-                        .disabled(viewModel.isGitOperationInProgress)
-                    }
-                }
-
-                if viewModel.remoteBranches.isEmpty == false {
-                    Divider()
-                    Text("Remote Branches")
-                    ForEach(viewModel.remoteBranches) { branch in
-                        Button {
-                            viewModel.checkoutBranch(branch)
-                        } label: {
-                            Label(branch.name, systemImage: "arrow.down.to.line")
-                        }
-                        .disabled(viewModel.isGitOperationInProgress)
-                    }
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "point.topleft.down.curvedto.point.bottomright.up")
-                    Text(viewModel.repositoryContext?.branchName ?? "Branch")
-                        .lineLimit(1)
-                    Image(systemName: "chevron.down")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .menuStyle(.button)
-            .help("Switch or create branches")
-        }
-    }
-
-    struct GitHubAccountMenu: View {
-        @ObservedObject var viewModel: DashboardViewModel
-
-        var body: some View {
-            Menu {
-                if viewModel.suggestedGitHubUsernames.isEmpty == false {
-                    ForEach(viewModel.suggestedGitHubUsernames, id: \.self) { username in
-                        Button {
-                            viewModel.selectGitHubAccount(username: username)
-                        } label: {
-                            HStack {
-                                Text(username)
-                                if viewModel.gitHubAccountState.credentialUsername?.localizedCaseInsensitiveCompare(username) == .orderedSame {
-                                    Spacer()
-                                    Image(systemName: "checkmark")
-                                }
-                            }
-                        }
-                        .disabled(viewModel.isGitOperationInProgress)
-                    }
-
-                    Divider()
-                }
-
-                Button("Other Account...") {
-                    viewModel.showGitHubAccountSheet()
-                }
-                .disabled(viewModel.isGitOperationInProgress)
-
-                Button("Use Default Git Credential") {
-                    viewModel.useDefaultGitHubAccount()
-                }
-                .disabled(viewModel.isGitOperationInProgress || viewModel.gitHubAccountState.credentialUsername == nil)
-            } label: {
-                Label(viewModel.gitHubAccountDisplayName, systemImage: "person.crop.circle")
-                    .lineLimit(1)
-            }
-            .menuStyle(.button)
-            .help(viewModel.gitHubAccountStatusText)
-        }
-    }
-
     struct SidebarCommitPanel: View {
         @ObservedObject var viewModel: DashboardViewModel
 
@@ -1011,78 +1090,6 @@ extension DashboardView {
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
-            }
-        }
-    }
-
-    struct SidebarRepositoryHeader: View {
-        @ObservedObject var viewModel: DashboardViewModel
-
-        var body: some View {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 8) {
-                    Label("Current Repository", systemImage: "folder")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-
-                if let context = viewModel.repositoryContext {
-                    HStack(spacing: 8) {
-                        Text(context.repoName)
-                            .font(.headline)
-                            .lineLimit(1)
-
-                        Spacer()
-
-                        if viewModel.isGitRepository {
-                            BranchPickerMenu(viewModel: viewModel)
-                                .frame(maxWidth: 170)
-                        }
-                    }
-
-                    if viewModel.isGitRepository {
-                        VStack(alignment: .leading, spacing: 8) {
-                            if viewModel.gitHubAccountState.isGitHubRemote {
-                                GitHubAccountMenu(viewModel: viewModel)
-                                    .frame(maxWidth: .infinity)
-                            }
-
-                            if viewModel.shouldShowPrimarySyncAction {
-                                Button {
-                                    viewModel.performPrimarySyncAction()
-                                } label: {
-                                    Label(viewModel.primarySyncActionTitle, systemImage: viewModel.primarySyncActionSymbolName)
-                                        .frame(maxWidth: .infinity)
-                                }
-                                .buttonStyle(.bordered)
-                                .frame(maxWidth: .infinity)
-                                .disabled(viewModel.canPerformPrimarySyncAction == false)
-                                .help(viewModel.primarySyncActionTitle)
-                            }
-
-                            Text(viewModel.syncStatusText)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    } else {
-                        Text(viewModel.folderWorkspaceReason)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    Text("No repository open")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Button("Open Repository") {
-                        viewModel.openRepository()
-                    }
-                }
-
-                Text(viewModel.sidebarCountSummary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
     }

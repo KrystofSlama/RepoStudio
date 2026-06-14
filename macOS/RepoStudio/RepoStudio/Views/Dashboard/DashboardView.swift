@@ -58,8 +58,7 @@ struct DashboardView: View {
         .toolbar {
             DashboardToolbar(viewModel: viewModel)
         }
-        .navigationTitle(viewModel.windowTitle)
-        .navigationSubtitle(viewModel.repositoryContext?.branchName ?? "")
+        //.navigationTitle(viewModel.windowTitle)
         .focusedSceneValue(
             \.dashboardCommandActions,
             DashboardCommandActions(viewModel: viewModel)
