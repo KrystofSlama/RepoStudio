@@ -1,7 +1,7 @@
 RepoStudio is a macOS SwiftUI app for working with local Git repositories and
 Markdown files in one place. It is designed for quick drafting and review
 workflows: inspect repository status, open files, edit Markdown, and preview
-changes side by side. Git integration coming!!
+changes side by side. Git integration coming!!!
 
 ## Features
 
